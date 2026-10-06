@@ -1,7 +1,0 @@
-﻿{
-  "name": "astra",
-  "private": true,
-  "type": "module",
-  "scripts": { "test": "node --test", "serve": "node scripts/serve.js" }
-}
-
