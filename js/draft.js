@@ -49,7 +49,7 @@ export function scoreCandidates({ ids, heroes, rows, enemies, matchupsByEnemy, m
     const edge = vs.length ? vs.reduce((s, x) => s + (x.v.adj - 0.5), 0) / vs.length : 0;
     const score = 0.5 * personal + 1.5 * edge + 0.5 * (mt.wr - 0.5) + (fav.has(id) ? 0.02 : 0);
     const reasons = [];
-    if (known) reasons.push(`You: ${pct(r.wr)} over ${r.g} games.`); else reasons.push('New to you: no personal record to lean on.');
+    if (known) reasons.push(`You: ${pct(r.wr)} over ${r.g} ${r.recent ? "recent " : ""}games.`); else reasons.push('New to you: no personal record to lean on.');
     for (const { enemy, v } of vs) reasons.push(`Against ${heroes[enemy] ? heroes[enemy].name : enemy}: ${pct(v.wr)} over ${v.games.toLocaleString('en-US')} public games.`);
     if (enemies.length && !vs.length) reasons.push('No matchup data against the enemy picks.');
     reasons.push(`Bracket meta: ${pct(mt.wr)}.`);

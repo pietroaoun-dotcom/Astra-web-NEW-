@@ -10,11 +10,11 @@ export const when = t => new Date(t * 1000).toLocaleDateString(undefined, { day:
 const RANKS = ['', 'Herald', 'Guardian', 'Crusader', 'Archon', 'Legend', 'Ancient', 'Divine', 'Immortal'];
 export const rankName = rt => (rt ? RANKS[Math.min(8, Math.floor(rt / 10))] + (rt % 10 ? ' ' + (rt % 10) : '') : 'Unranked');
 
-export const NAV = [['#/', 'Coach'], ['#/draft', 'Draft'], ['#/live', 'Live'], ['#/heroes', 'Heroes'], ['#/matches', 'Matches'], ['#/prefs', 'Preferences']];
+export const NAV = [['#/', 'Coach'], ['#/train', 'Train'], ['#/draft', 'Draft'], ['#/live', 'Live'], ['#/heroes', 'Heroes'], ['#/matches', 'Matches'], ['#/prefs', 'Preferences']];
 
 export function nav(route) {
   // A single hero or match page belongs to its list section in the nav.
-  const section = route.startsWith('/hero/') ? '/heroes' : route.startsWith('/match/') ? '/matches' : route;
+  const section = route.startsWith('/hero/') ? '/heroes' : route.startsWith('/match/') ? '/matches' : route.startsWith('/period/') ? '/' : route;
   return NAV.map(([h, l]) => `<a href="${h}"${(h === '#/' ? section === '/' : section.startsWith(h.slice(1))) ? ' aria-current="page"' : ''}>${l}</a>`).join('');
 }
 
@@ -91,7 +91,7 @@ ${error ? `<p class="err-line" role="alert">${esc(error)}</p>` : ''}</form>`;
 }
 
 // ---------- coach home ----------
-const planItem = (i, n) => `<li><span class="rank" aria-hidden="true">${n}</span><div><h3>${esc(i.title)} ${i.pinned ? '<span class="pill focus">Your focus</span> ' : ''}<span class="pill ${i.conf}" title="Based on ${i.n} games">${i.conf} confidence · ${i.n} games</span></h3>
+export const planItem = (i, n) => `<li><span class="rank" aria-hidden="true">${n}</span><div><h3>${esc(i.title)} ${i.pinned ? '<span class="pill focus">Your focus</span> ' : ''}<span class="pill ${i.conf}" title="Based on ${i.n} games">${i.conf} confidence · ${i.n} games</span></h3>
 <ul class="ev">${i.evidence.map(e => `<li>${esc(e)}</li>`).join('')}</ul>
 ${i.why ? `<p class="mu sm" style="margin:6px 0">${esc(i.why)}</p>` : ''}
 ${i.drill ? `<p class="kv"><b>Drill:</b> ${esc(i.drill)}</p>` : ''}${i.target ? `<p class="kv"><b>Target:</b> ${esc(i.target)}</p>` : ''}</div></li>`;
@@ -106,24 +106,24 @@ function miniSpark(values, color) {
 }
 
 const CHANGE = { better: ['Improving', 'w', '#58d6a0'], worse: ['Getting worse', 'l', '#ff7f98'], flat: ['Steady', 'mu', '#8b7bff'] };
-const trendsCard = trends => trends.length ? `<section class="card"><h2>Trends</h2><p class="mu sm" style="margin:-6px 0 12px">Last 30 ranked games against the 30 before.</p><div class="trends">${trends.map(t => {
+export const trendsCard = trends => trends.length ? `<section class="card"><h2>Trends</h2><p class="mu sm" style="margin:-6px 0 12px">Last 30 ranked games against the 30 before.</p><div class="trends">${trends.map(t => {
   const [label, cls, col] = CHANGE[t.change];
   return `<div class="trend"><div class="mu sm">${esc(t.label)}</div><div class="row" style="justify-content:space-between;align-items:flex-end"><div><span class="big" style="font-size:26px">${esc(t.now)}</span> <span class="mu sm">from ${esc(t.before)}</span></div>${miniSpark(t.series, col)}</div><div class="sm ${cls}">${label}</div></div>`;
 }).join('')}</div></section>` : '';
 
 const recRow = (r, kind) => `<li><div class="row" style="justify-content:space-between"><b>${heroLink(_heroes[r.id], r.id)}</b><span class="pill ${r.conf}">${r.conf} confidence</span></div><ul class="ev">${r.reasons.map(x => `<li>${esc(x)}</li>`).join('')}</ul></li>`;
-const recsCard = (recs, form) => `<section class="card"><h2>Who to play</h2>
+export const recsCard = (recs, form) => `<section class="card"><h2>Who to play</h2>
 ${recs.play.length ? `<h3>Play more</h3><ul class="recs">${recs.play.map(r => recRow(r)).join('')}</ul>` : '<p class="mu">Play 8+ games on a few heroes and Astra can rank them.</p>'}
 ${recs.stop.length ? `<h3 style="margin-top:14px">Stop or limit</h3><ul class="recs">${recs.stop.map(r => recRow(r)).join('')}</ul>` : ''}
 ${form.length ? `<h3 style="margin-top:14px">Form changes (last 10 games on the hero)</h3><ul class="ev">${form.map(f => `<li>${esc(f.name)}: ${pc(f.recentWR)} lately (${f.recentN} games) against ${pc(f.olderWR)} before. ${f.delta > 0 ? 'Heating up.' : 'Cooling off.'}</li>`).join('')}</ul>` : ''}
 <p class="mu sm" style="margin:12px 0 0">Ranked by long-run win rate blended with the hero's bracket average, recent form and your preferences. Details on the Heroes page.</p></section>`;
 
 const toneIcon = { good: '▲', bad: '▼', info: '•' };
-const notesList = notes => `<ul class="notes">${notes.map(n => `<li class="${n.tone}"><span aria-hidden="true">${toneIcon[n.tone]}</span> ${esc(n.text)}</li>`).join('')}</ul>`;
-const lastGameCard = (m, notes) => m ? `<section class="card"><h2>Your last game</h2><div class="row" style="justify-content:space-between;margin-bottom:8px"><a class="rowlink hero" href="#/match/${m.id}">${portrait(_heroes[m.h])}<span>${esc(_heroes[m.h] ? _heroes[m.h].name : 'Hero ' + m.h)} · <span class="${won(m) ? 'w' : 'l'}">${won(m) ? 'Win' : 'Loss'}</span> · ${mmss(m.d)} · ${m.k}/${m.de}/${m.a}</span></a></div>${notes.length ? notesList(notes) : '<p class="mu">A fairly typical game for you.</p>'}</section>` : '';
+export const notesList = notes => `<ul class="notes">${notes.map(n => `<li class="${n.tone}"><span aria-hidden="true">${toneIcon[n.tone]}</span> ${esc(n.text)}</li>`).join('')}</ul>`;
+export const lastGameCard = (m, notes) => m ? `<section class="card"><h2>Your last game</h2><div class="row" style="justify-content:space-between;margin-bottom:8px"><a class="rowlink hero" href="#/match/${m.id}">${portrait(_heroes[m.h])}<span>${esc(_heroes[m.h] ? _heroes[m.h].name : 'Hero ' + m.h)} · <span class="${won(m) ? 'w' : 'l'}">${won(m) ? 'Win' : 'Loss'}</span> · ${mmss(m.d)} · ${m.k}/${m.de}/${m.a}</span></a></div>${notes.length ? notesList(notes) : '<p class="mu">A fairly typical game for you.</p>'}</section>` : '';
 
 /** Goal, role and focus at the top of the Coach page, so Preferences visibly drive the coaching. */
-function setupBanner({ prefs, focusFound, focusName, facts }) {
+export function setupBanner({ prefs, focusFound, focusName, facts }) {
   const bits = [];
   if (prefs.goal) bits.push(`<span><b>Goal</b> ${esc(prefs.goal)}</span>`);
   if (prefs.role) bits.push(`<span><b>Role</b> ${esc(prefs.role)}</span>`);
@@ -313,7 +313,7 @@ ${picks.length ? `<p class="sm" style="margin:8px 0 4px"><b>Best picks now</b></
 }
 
 // ---------- preferences ----------
-export function prefsView({ prefs, heroes, facts, focusAreas, saved }) {
+export function prefsView({ prefs, heroes, facts, focusAreas, saved, voices = [], voiceCfg = {}, engine = 'basic', sync = {} }) {
   const names = Object.values(heroes).sort((a, b) => a.name.localeCompare(b.name));
   const chips = (ids, kind) => ids.length ? `<div class="chips">${ids.map(id => `<span class="chip">${portrait(heroes[id])}${esc(heroes[id] ? heroes[id].name : id)}<button type="button" aria-label="Remove ${esc(heroes[id] ? heroes[id].name : id)}" data-act="rm-${kind}" data-id="${id}">×</button></span>`).join('')}</div>` : '<p class="mu sm" style="margin:6px 0">None yet.</p>';
   const dl = `<datalist id="hl">${names.map(h => `<option value="${esc(h.name)}"></option>`).join('')}</datalist>`;
@@ -334,5 +334,12 @@ ${saved ? notice('ok', 'Saved. Your Coach, Heroes, Draft and Live pages now use 
 <section class="card"><h2>What Astra remembers about you</h2><p class="mu sm" style="margin-top:-6px">Things you told Astra (for example "I struggle against Broodmother"). The AI uses them to personalise advice. Say "remember that …" or "forget …", or edit here.</p>
 ${facts.length ? `<ul class="facts">${facts.map(f => `<li><span>${esc(f.text)}</span><time class="mu sm">${new Date(f.ts).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}</time><button type="button" class="ghost" aria-label="Forget: ${esc(f.text)}" data-act="rm-fact" data-fid="${esc(f.id)}">Forget</button></li>`).join('')}</ul>` : '<p class="mu sm">Nothing yet.</p>'}
 <form class="row" data-form="add-fact" style="margin-top:8px"><input name="text" class="grow" maxlength="200" placeholder="Add something Astra should know" aria-label="Add a fact for Astra"><button class="pri">Add</button></form></section>
+<section class="card"><h2>Voice</h2><p class="mu sm" style="margin-top:-6px">${engine === 'natural' ? 'Astra is using a natural voice: it sounds human and starts instantly.' : engine === 'cloud' ? 'Astra is using the cloud voice. It has a small free quota and takes 2 to 3 seconds; a natural browser voice is faster.' : 'This browser only has basic voices, which sound robotic. Open Astra in <b>Microsoft Edge</b> for free natural voices that sound human and start instantly.'}</p>
+<div class="voice-row"><div><label class="f" for="v-engine">Voice engine</label><select id="v-engine" data-voice="engine"><option value="auto"${(voiceCfg.engine || 'auto') === 'auto' ? ' selected' : ''}>Automatic (best available)</option><option value="browser"${voiceCfg.engine === 'browser' ? ' selected' : ''}>Browser voice (instant)</option><option value="cloud"${voiceCfg.engine === 'cloud' ? ' selected' : ''}>Cloud voice (Gemini, limited)</option></select></div>
+<div><label class="f" for="v-name">Browser voice</label><select id="v-name" data-voice="name"><option value="">Best available</option>${voices.map(v => `<option value="${esc(v.name)}"${voiceCfg.name === v.name ? ' selected' : ''}>${esc(v.name)}${v.natural ? ' (natural)' : ''}</option>`).join('')}</select></div>
+<div><label class="f" for="v-rate">Speed: <span id="v-rate-val">${(voiceCfg.rate || 1.05).toFixed(2)}</span>x</label><input id="v-rate" type="range" min="0.8" max="1.5" step="0.05" value="${voiceCfg.rate || 1.05}" data-voice="rate" style="width:100%;padding:0"></div>
+<div style="align-self:end"><button type="button" class="pri" data-act="voice-test">Test voice</button></div></div>
+<p class="mu sm" style="margin:10px 0 0">To interrupt Astra, just start talking while Conversation mode is on, or hold the talk button.</p></section>
+<section class="card"><h2>Your profile</h2><p class="sm" style="margin-top:-4px">${esc(sync.text || '')}</p><p class="mu sm">Preferences, favourites, what Astra remembers, game notes, your draft and the conversation are saved under your player ID, so they follow you to any device or browser once you enter your passcode.</p><div class="row"><button data-act="sync-now">Save now</button></div></section>
 <section class="card"><h2>Data</h2><div class="row"><button data-act="resync">Re-sync everything</button><button data-act="convo-clear">Clear conversation</button><button data-act="logout" class="ghost">Switch player</button></div></section>`;
 }

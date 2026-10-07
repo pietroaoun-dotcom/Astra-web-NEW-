@@ -23,7 +23,7 @@ export function buildLastGame(matches, heroes) {
 }
 
 /** Compact, number-only context sent to the server. Hero names are resolved here, never raw ids. */
-export function buildContext({ account, matches, insights, heroes, rows, prefs, bracketLabel, notes = [], lastGame = null, draft = null, live = null, facts = [], page = null }) {
+export function buildContext({ account, matches, insights, heroes, rows, prefs, bracketLabel, notes = [], lastGame = null, draft = null, live = null, facts = [], page = null, coaching = null }) {
   const total = matches.length, w = matches.filter(won).length, l10 = matches.slice(0, 10);
   const name = id => (heroes[id] ? heroes[id].name : 'Hero ' + id);
   return {
@@ -31,7 +31,7 @@ export function buildContext({ account, matches, insights, heroes, rows, prefs, 
       rank: account ? account.rankName : null, rankedGamesSynced: total, rankedWinRate: total ? pct(w / total) + '%' : null,
       last10: l10.filter(won).length + '-' + (l10.length - l10.filter(won).length), bracketForMeta: bracketLabel,
     },
-    planBasis: 'last ' + Math.min(300, total) + ' ranked games',
+    planBasis: coaching && coaching.form ? coaching.form.label : 'recent ranked games',
     plan: insights.slice(0, 8).map(i => ({
       title: i.title, type: i.kind, confidence: i.conf, games: i.n, evidence: i.evidence.slice(0, 3), drill: i.drill || undefined, target: i.target || undefined,
     })),
@@ -45,6 +45,7 @@ export function buildContext({ account, matches, insights, heroes, rows, prefs, 
     },
     ...(facts.length ? { playerFacts: facts.slice(-30).map(f => String(f).slice(0, 200)) } : {}),
     ...(page ? { currentPage: page } : {}),
+    ...(coaching ? { coaching } : {}),
     recentGames: matches.slice(0, 10).map(m => ({ hero: name(m.h), result: won(m) ? 'win' : 'loss', kda: m.k + '/' + m.de + '/' + m.a, minutes: Math.round(m.d / 60) })),
     lastGame,
     ...(draft ? { draft } : {}),
@@ -59,7 +60,10 @@ export function parseCommand(raw) {
   const l = t.toLowerCase().replace(/[.!?]+$/, '');
   if (!l) return { type: 'empty' };
   if (/^(please )?(start|starting|begin)( the| a| my)?( new)?( game| match)?$/.test(l) || /^(game|match) (has )?(started|starting|start)$/.test(l)) return { type: 'start' };
-  const note = t.match(/^(?:note|remember|log)\b[\s:,.-]*(.*)$/i);
+  // "remember …" is a lasting fact about the player; "note …" / "log …" is something that happened in this game.
+  const fact = t.match(/^(?:please\s+)?(?:remember|keep in mind|don't forget)\b[\s:,.-]*(?:that\s+)?(.*)$/i);
+  if (fact) return fact[1].trim() ? { type: 'remember', text: fact[1].trim() } : { type: 'note-empty' };
+  const note = t.match(/^(?:note|log)\b[\s:,.-]*(.*)$/i);
   if (note) return note[1].trim() ? { type: 'note', text: note[1].trim() } : { type: 'note-empty' };
   if (/^(the )?(game|match) (is |has )?(finished|over|ended|done|complete)/.test(l) || /^(finished|game over|i'?m done)/.test(l) || /^(analy[sz]e|review) (my )?(last |latest )?(game|match)/.test(l)) return { type: 'finish' };
   return { type: 'question', text: t };
@@ -230,6 +234,19 @@ export function mergeLocalActions(aiActions, text, heroes) {
     }
   }
   return [...aiActions, ...extra];
+}
+
+/**
+ * Instant path: when every clause of what was said is a clear command the offline parser understands
+ * (and nothing is asked), apply it without waiting for the AI. Returns the actions, or null.
+ */
+export function localAll(text, heroes) {
+  if (asksSomething(text)) return null;
+  const parts = clauses(text);
+  if (!parts.length) return null;
+  const out = [];
+  for (const c of parts) { const a = localIntent(c, heroes); if (!a.length) return null; out.push(...a); }
+  return out;
 }
 
 /** Does this sentence ask for advice (so an answer should follow any changes it reports)? */

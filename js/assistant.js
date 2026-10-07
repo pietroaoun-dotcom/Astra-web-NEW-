@@ -2,7 +2,7 @@
 // Owns speech in (push-to-talk and conversation mode), speech out (cloud voice with browser fallback),
 // the game timer and notes, and the pipeline: local command -> AI agent (/api/agent) -> app actions -> reply.
 import { store } from './store.js';
-import { parseCommand, speakable, ruleAnswer, ruleReview, localIntent, mergeLocalActions, asksSomething } from './context.js';
+import { parseCommand, speakable, ruleAnswer, ruleReview, localIntent, localAll, mergeLocalActions, asksSomething } from './context.js';
 
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 const MAX_MESSAGES = 60;
@@ -46,7 +46,11 @@ export function createAssistant(api) {
   const passcode = () => store.get('passcode', '');
 
   // ---------- speech out ----------
-  let audio = null, speakToken = 0, ttsDown = false;
+  // Voice settings (saved with the profile): engine 'auto' | 'browser' | 'cloud', a browser voice name, speed.
+  // Natural browser voices (Microsoft Edge's "Natural" voices) sound human and start instantly; the cloud voice
+  // has a very small free quota (measured: refused after a few requests) and takes 2-3 seconds per sentence.
+  const voiceCfg = () => ({ engine: 'auto', name: '', rate: 1.05, ...store.get('voice', {}) });
+  let audio = null, speakToken = 0, ttsDown = false, speakingLine = '';
 
   function stopSpeaking() {
     speakToken++;
@@ -54,16 +58,26 @@ export function createAssistant(api) {
     try { speechSynthesis.cancel(); } catch { /* not supported */ }
     if (st.status === 'speaking') setStatus('idle');
   }
-  function pickVoice() {
+  /** English voices this browser offers, best first. */
+  function voices() {
     try {
-      const vs = speechSynthesis.getVoices().filter(v => /^en/i.test(v.lang));
-      const score = v => (/natural|neural|online/i.test(v.name) ? 10 : 0) + (/en-(US|GB|AU)/i.test(v.lang) ? 2 : 0) + (/google|microsoft/i.test(v.name) ? 1 : 0);
-      return vs.sort((a, b) => score(b) - score(a))[0] || null;
-    } catch { return null; }
+      const score = v => (/natural|neural/i.test(v.name) ? 20 : 0) + (/online/i.test(v.name) ? 8 : 0) + (/google/i.test(v.name) ? 4 : 0) + (/en-(US|GB)/i.test(v.lang) ? 2 : 0);
+      return speechSynthesis.getVoices().filter(v => /^en/i.test(v.lang)).sort((a, b) => score(b) - score(a));
+    } catch { return []; }
   }
+  const isNatural = v => !!v && /natural|neural/i.test(v.name);
+  function pickVoice() { const cfg = voiceCfg(), vs = voices(); return (cfg.name && vs.find(v => v.name === cfg.name)) || vs[0] || null; }
+  function useCloud(local) {
+    const cfg = voiceCfg();
+    if (local || ttsDown || !passcode() || cfg.engine === 'browser') return false;
+    if (cfg.engine === 'cloud') return true;
+    return !isNatural(pickVoice()); // auto: cloud only when this browser has no natural voice
+  }
+  const speakingNow = () => st.status === 'speaking' || !!(audio && !audio.paused) || (('speechSynthesis' in window) && speechSynthesis.speaking);
   function afterSpeech(token) {
     if (token !== speakToken) return;
     audio = null;
+    setTimeout(() => { if (token === speakToken) speakingLine = ''; }, 1500); // the echo tail can arrive late
     if (st.status === 'speaking') setStatus('idle');
     if (st.conversation) resumeListening();
   }
@@ -71,21 +85,23 @@ export function createAssistant(api) {
     if (!('speechSynthesis' in window)) return afterSpeech(token);
     try {
       const u = new SpeechSynthesisUtterance(text);
-      const v = pickVoice(); if (v) u.voice = v;
-      u.rate = 1.02; u.pitch = 0.95;
+      const v = pickVoice(); if (v) { u.voice = v; u.lang = v.lang; }
+      u.rate = Math.min(1.5, Math.max(0.8, voiceCfg().rate));
       u.onstart = () => { if (token === speakToken) setStatus('speaking'); };
       u.onend = u.onerror = () => afterSpeech(token);
       speechSynthesis.speak(u);
     } catch { afterSpeech(token); }
   }
-  /** Speak the first sentence. local=true uses the instant browser voice (no network, no cloud quota). */
+  /** Speak the first sentence. In conversation mode Astra keeps listening, so talking over it interrupts it. */
   async function speak(text, { local = false } = {}) {
     const line = speakable(text);
     if (!st.tts || !line) { if (st.conversation) resumeListening(); return; }
-    pauseListening();                 // never listen to our own voice
+    if (!st.conversation) pauseListening();
     stopSpeaking();
     const token = speakToken;
-    if (!local && passcode() && !ttsDown) {
+    speakingLine = line;
+    if (st.conversation) resumeListening();
+    if (useCloud(local)) {
       try {
         const res = await fetch('/api/speak', { method: 'POST', headers: { 'content-type': 'application/json', 'x-astra-passcode': passcode() }, body: JSON.stringify({ text: line }) });
         if (!res.ok) { if ([404, 429, 503].includes(res.status)) ttsDown = true; throw new Error('tts ' + res.status); }
@@ -105,6 +121,15 @@ export function createAssistant(api) {
   // ---------- speech in ----------
   let rc = null, listening = false, wantListen = false;
 
+  /** Is this transcript just Astra's own voice coming back through the speakers? */
+  function isEcho(said) {
+    if (!speakingLine || !said) return false;
+    const words = said.toLowerCase().match(/[a-z0-9']+/g) || [];
+    if (!words.length) return false;
+    const line = new Set(speakingLine.toLowerCase().match(/[a-z0-9']+/g) || []);
+    return words.filter(w => line.has(w)).length / words.length >= 0.6;
+  }
+
   function listen() {
     if (!SR) { st.notice = 'Voice input needs Chrome or Edge. Typing works everywhere.'; emit(); return; }
     if (listening) return;
@@ -118,13 +143,16 @@ export function createAssistant(api) {
       let live = '';
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const r = e.results[i];
+        const said = r[0].transcript.trim();
+        if (isEcho(said)) continue;
+        // Barge-in: the player started talking over Astra, so stop speaking straight away.
+        if (speakingNow() && said.split(/\s+/).filter(Boolean).length >= 2) stopSpeaking();
         if (r.isFinal) {
-          const said = r[0].transcript.trim();
           st.interim = '';
           if (said) { pauseListening(); send(said, { voice: true }); }
         } else live += r[0].transcript;
       }
-      if (live && st.interim !== live) { st.interim = live; emit(); }
+      if (st.interim !== live) { st.interim = live; emit(); }
     };
     rc.onerror = e => {
       const fatal = { 'not-allowed': 'Microphone access is blocked. Allow it from the icon in the address bar, or type instead.', 'service-not-allowed': 'Microphone access is blocked. Allow it from the icon in the address bar, or type instead.', 'audio-capture': 'No microphone was found. Plug one in, or type instead.', network: 'Speech recognition could not reach its service. Typing still works.' }[e.error];
@@ -134,14 +162,14 @@ export function createAssistant(api) {
       listening = false; rc = null;
       if (st.interim) { st.interim = ''; }
       if (st.status === 'listening') setStatus('idle'); else emit();
-      // Conversation mode: Chrome ends sessions after silence, so start a new one while nothing else is happening.
-      if (wantListen && st.conversation && !busy && st.status !== 'speaking') resumeListening();
+      // Conversation mode: Chrome ends sessions after silence, so start a new one unless Astra is thinking.
+      if (wantListen && st.conversation && !busy) resumeListening();
     };
-    try { rc.start(); listening = true; setStatus('listening'); } catch { listening = false; }
+    try { rc.start(); listening = true; if (!speakingNow()) setStatus('listening'); } catch { listening = false; }
   }
-  /** Stop listening for now without leaving conversation mode (while thinking or speaking). */
+  /** Stop listening for now without leaving conversation mode (while thinking). */
   function pauseListening() { wantListen = false; try { rc && rc.stop(); } catch { /* already stopped */ } }
-  function resumeListening() { if (st.conversation && !busy && !listening) setTimeout(() => { if (st.conversation && !busy && !listening && st.status !== 'speaking') listen(); }, 250); }
+  function resumeListening() { if (st.conversation && !listening) setTimeout(() => { if (st.conversation && !busy && !listening) listen(); }, 250); }
 
   // ---------- server calls ----------
   async function post(path, body) {
@@ -292,7 +320,16 @@ export function createAssistant(api) {
     if (cmd.type === 'start') return gameStart();
     if (cmd.type === 'note-empty') return reply('What should I note? Say note, then what happened.', { local: true });
     if (cmd.type === 'note') return addNote(cmd.text);
+    if (cmd.type === 'remember') { const { acts } = await applyActions([{ type: 'remember', text: cmd.text }]); return reply('', { acts, local: true }); }
     if (cmd.type === 'finish') return finishGame();
+    // Instant path: clear commands (picks, settings, navigation) are applied without waiting for the AI.
+    const quick = localAll(text, api.heroes());
+    if (quick) {
+      const { acts, finish } = await applyActions(quick);
+      reply('', { acts, local: true });
+      if (finish) await finishGame();
+      return;
+    }
     if (busy) return reply('One moment, still working on the last one.', { say: false });
     return agent(text);
   }
@@ -313,7 +350,13 @@ export function createAssistant(api) {
     },
     setTts(on) { st.tts = !!on; store.set('tts', st.tts); if (!on) stopSpeaking(); emit(); },
     stopSpeaking,
-    setPasscode(v) { store.set('passcode', String(v).trim()); st.needPass = false; ttsDown = false; st.notice = 'Passcode saved on this device.'; emit(); },
+    setPasscode(v) { store.set('passcode', String(v).trim()); st.needPass = false; ttsDown = false; st.notice = 'Passcode saved on this device.'; emit(); if (api.onPasscode) api.onPasscode(); },
+    /** Re-read the conversation and settings after the profile was loaded from the server. */
+    reload() { st.messages = store.get('convo', []).filter(m => m.kind !== 'wait'); st.tts = store.get('tts', true); emit(); },
+    voices: () => voices().map(v => ({ name: v.name, lang: v.lang, natural: isNatural(v) })),
+    context: extra => api.context(extra),
+    testVoice() { speak('Hey, I am Astra. Tell me the enemy picks and I will tell you what to play.'); },
+    get engine() { return useCloud(false) ? 'cloud' : (isNatural(pickVoice()) ? 'natural' : 'basic'); },
     /** Spoken announcement, used for game reminders. */
     say(text) { reply(text, { kind: 'reminder' }); },
     clear() { st.messages = []; persist(); emit(); },

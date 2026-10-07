@@ -64,3 +64,23 @@ export async function loadMatchups(heroId) {
   if (!m) { m = await get('heroes/' + heroId + '/matchups'); putCache(key, m); }
   return m;
 }
+
+/** Item constants slimmed to what the build view needs: id -> key, key -> { dname, cost, img }. */
+export async function loadItems() {
+  let v = cached('items', 7 * DAY);
+  if (!v) {
+    const [ids, items] = await Promise.all([get('constants/item_ids'), get('constants/items')]);
+    const slimItems = {};
+    for (const [k, it] of Object.entries(items)) slimItems[k] = { dname: it.dname, cost: it.cost, img: it.img };
+    v = { ids, items: slimItems };
+    putCache('items', v);
+  }
+  return v;
+}
+
+export async function loadItemPopularity(heroId) {
+  const key = 'pop:' + heroId;
+  let p = cached(key, 3 * DAY);
+  if (!p) { p = await get('heroes/' + heroId + '/itemPopularity'); putCache(key, p); }
+  return p;
+}
