@@ -319,3 +319,4 @@ td,th{padding:9px 5px}
 .item .fb{width:44px;height:32px}
 .voice-row{display:grid;gap:10px;grid-template-columns:1fr}
 @media(min-width:720px){.voice-row{grid-template-columns:1fr 1fr}}
+.voice-row>div{min-width:0}.voice-row select{width:100%;max-width:100%}
