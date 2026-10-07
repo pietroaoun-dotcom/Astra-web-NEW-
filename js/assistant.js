@@ -71,7 +71,7 @@ export function createAssistant(api) {
     const cfg = voiceCfg();
     if (local || ttsDown || !passcode() || cfg.engine === 'browser') return false;
     if (cfg.engine === 'cloud') return true;
-    return !isNatural(pickVoice()); // auto: cloud only when this browser has no natural voice
+    return false; // auto: always the instant browser voice; the cloud voice adds 2-3 s and has a tiny free quota
   }
   const speakingNow = () => st.status === 'speaking' || !!(audio && !audio.paused) || (('speechSynthesis' in window) && speechSynthesis.speaking);
   function afterSpeech(token) {
@@ -119,7 +119,17 @@ export function createAssistant(api) {
   }
 
   // ---------- speech in ----------
-  let rc = null, listening = false, wantListen = false;
+  let rc = null, listening = false, wantListen = false, holding = false, silenceTimer = null, sent = false;
+  const SILENCE_MS = 700;
+  /** Send what was heard once per listening session (whichever comes first: silence, release, or Chrome's final). */
+  function finish(text) {
+    clearTimeout(silenceTimer);
+    const t = String(text || '').trim();
+    if (sent || !t) return;
+    sent = true; st.interim = '';
+    pauseListening();
+    send(t, { voice: true });
+  }
 
   /** Is this transcript just Astra's own voice coming back through the speakers? */
   function isEcho(said) {
@@ -135,30 +145,36 @@ export function createAssistant(api) {
     if (listening) return;
     wantListen = true;
     st.notice = '';
+    sent = false;
     rc = new SR();
+    const session = rc;
     rc.lang = 'en-US';
     rc.continuous = st.conversation;
     rc.interimResults = true;
     rc.onresult = e => {
       let live = '';
+      clearTimeout(silenceTimer);
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const r = e.results[i];
         const said = r[0].transcript.trim();
         if (isEcho(said)) continue;
         // Barge-in: the player started talking over Astra, so stop speaking straight away.
         if (speakingNow() && said.split(/\s+/).filter(Boolean).length >= 2) stopSpeaking();
-        if (r.isFinal) {
-          st.interim = '';
-          if (said) { pauseListening(); send(said, { voice: true }); }
-        } else live += r[0].transcript;
+        if (r.isFinal) finish(said);
+        else live += r[0].transcript;
       }
+      if (sent) return;
       if (st.interim !== live) { st.interim = live; emit(); }
+      // Hands-free: a short pause means you're done; no need to wait for Chrome to decide.
+      if (live.trim() && !holding && !speakingNow()) silenceTimer = setTimeout(() => { if (rc === session) finish(st.interim); }, SILENCE_MS);
     };
     rc.onerror = e => {
       const fatal = { 'not-allowed': 'Microphone access is blocked. Allow it from the icon in the address bar, or type instead.', 'service-not-allowed': 'Microphone access is blocked. Allow it from the icon in the address bar, or type instead.', 'audio-capture': 'No microphone was found. Plug one in, or type instead.', network: 'Speech recognition could not reach its service. Typing still works.' }[e.error];
       if (fatal) { wantListen = false; st.conversation = false; st.notice = fatal; emit(); }
     };
     rc.onend = () => {
+      clearTimeout(silenceTimer);
+      if (!sent && st.interim && rc === session) finish(st.interim); // never drop words that were heard
       listening = false; rc = null;
       if (st.interim) { st.interim = ''; }
       if (st.status === 'listening') setStatus('idle'); else emit();
@@ -340,8 +356,8 @@ export function createAssistant(api) {
     subscribe(fn) { subs.add(fn); return () => subs.delete(fn); },
     send,
     /** Hold-to-talk: start on press, stop on release (the final words still arrive). */
-    holdStart() { stopSpeaking(); if (st.conversation) return; listen(); },
-    holdEnd() { if (!st.conversation) pauseListening(); },
+    holdStart() { stopSpeaking(); if (st.conversation) return; holding = true; listen(); },
+    holdEnd() { holding = false; if (st.conversation) return; if (st.interim) finish(st.interim); else pauseListening(); },
     /** Conversation mode: Astra listens, stops while it thinks and speaks, then listens again. */
     setConversation(on) {
       st.conversation = !!on;

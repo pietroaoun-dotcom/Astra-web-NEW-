@@ -269,7 +269,7 @@ function drawLiveConvo(st) {
   orb.disabled = !st.voiceSupported;
   orb.querySelector('span').textContent = !st.voiceSupported ? 'No voice' : st.conversation ? (st.status === 'listening' ? 'Listening' : 'Tap to stop') : (st.status === 'listening' ? 'Listening' : 'Hold to talk');
   $('live-pass').hidden = !st.needPass;
-  $('live-notice').textContent = st.notice || (st.needPass ? 'Enter your passcode to unlock the AI. Picks, notes and settings still work without it.' : '');
+  $('live-notice').textContent = st.notice || (st.needPass ? 'Enter your passcode to unlock the AI. Picks, notes and settings still work without it.' : assistant.engine === 'basic' && st.tts ? 'Tip: this browser only has robotic voices. Open Astra in Microsoft Edge for a natural voice with no delay.' : '');
   $('live-conv').checked = st.conversation;
   $('live-conv').disabled = !st.voiceSupported;
   $('live-tts').checked = st.tts;
