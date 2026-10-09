@@ -9,7 +9,7 @@ export const SPEAK_LIMITS = { text: 400, perIpPerMin: 12, dailyTotal: Number(pro
 // the TTS models read them aloud (measured: a style prefix made the same sentence 50 to 150 percent longer).
 
 export default async function handler(req, res) {
-  const g = guard(req, res, { name: 'speak', perMin: SPEAK_LIMITS.perIpPerMin, daily: SPEAK_LIMITS.dailyTotal });
+  const g = await guard(req, res, { name: 'speak', perMin: SPEAK_LIMITS.perIpPerMin, daily: SPEAK_LIMITS.dailyTotal });
   if (!g) return;
   let body;
   try { body = await readJson(req, 4000); } catch (e) { return send(res, e.status || 400, { error: 'body', message: 'Invalid JSON.' }); }

@@ -232,3 +232,103 @@ export function weeklyStrategy({ insights, roles, recs, toTry, prefs, heroes }) 
   const goal = prefs.goal ? `Goal: ${prefs.goal}. ` : '';
   return { headline: goal + (focus ? `This week is about one thing: ${focus.title.toLowerCase()}.` : 'Keep doing what works and widen your pool carefully.'), points };
 }
+
+// ---------- daily missions ----------
+
+const ymd = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+export const dayKey = t => ymd(new Date(t * 1000));
+
+/** Mission targets from the player's current form and plan (computed once, used for every day). */
+export function missionTargets({ form, recs, prefs }) {
+  const mains = [...new Set([...recs.play.slice(0, 3).map(r => r.id), ...prefs.favorites])];
+  const deaths = form && form.games ? Math.max(3, Math.round((form.de - 1) * 2) / 2) : 6;
+  return { maxGames: 3, deaths, mains, wins: 2 };
+}
+
+/**
+ * Today's missions, checked automatically against the games played (newest first in `list`).
+ * state: 'todo' (nothing played yet), 'active' (in progress), 'done', 'failed'.
+ */
+export function dailyMissions(list, t, heroes) {
+  const asc = [...list].sort((a, b) => a.t - b.t);
+  const g = asc.length, wins = asc.filter(won).length;
+  const name = id => (heroes[id] ? heroes[id].name : 'Hero ' + id);
+  const out = [];
+  out.push({ id: 'session', title: `Play at most ${t.maxGames} games`, detail: `${g} played`, state: !g ? 'todo' : g <= t.maxGames ? 'done' : 'failed' });
+  const avgDe = g ? asc.reduce((s, m) => s + m.de, 0) / g : 0;
+  out.push({ id: 'deaths', title: `Average ${t.deaths} deaths or fewer`, detail: g ? `${avgDe.toFixed(1)} per game today` : 'Your recent average minus one', state: !g ? 'todo' : avgDe <= t.deaths ? 'done' : 'failed' });
+  if (t.mains.length) {
+    const off = asc.filter(m => !t.mains.includes(m.h));
+    out.push({ id: 'mains', title: `Only play ${t.mains.slice(0, 3).map(name).join(', ')}${t.mains.length > 3 ? ' or a favourite' : ''}`, detail: g ? (off.length ? `${off.length} game${off.length > 1 ? 's' : ''} on other heroes` : 'All games on your mains') : 'Your best heroes right now', state: !g ? 'todo' : off.length ? 'failed' : 'done' });
+  }
+  let lossRun = 0, broke = false;
+  for (const m of asc) { if (lossRun >= 2) { broke = true; break; } lossRun = won(m) ? 0 : lossRun + 1; }
+  out.push({ id: 'tilt', title: 'Stop after two losses in a row', detail: broke ? 'Kept playing after two losses' : lossRun >= 2 ? 'Two losses: stop for today' : 'No tilt queue', state: !g ? 'todo' : broke ? 'failed' : 'done' });
+  out.push({ id: 'win', title: `Win ${t.wins} games`, detail: `${Math.min(wins, t.wins)}/${t.wins}`, state: wins >= t.wins ? 'done' : g ? 'active' : 'todo', bonus: true });
+  return out;
+}
+
+/** Consecutive earlier days (with games) where every discipline mission was done. Rest days don't break it. */
+export function missionStreak(matches, t, heroes, now = new Date()) {
+  const byDay = new Map();
+  for (const m of matches) { const k = dayKey(m.t); if (!byDay.has(k)) byDay.set(k, []); byDay.get(k).push(m); }
+  let streak = 0;
+  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  for (let i = 0; i < 90; i++) {
+    d.setDate(d.getDate() - 1);
+    const games = byDay.get(ymd(d));
+    if (!games) continue;
+    if (dailyMissions(games, t, heroes).filter(x => !x.bonus).every(x => x.state === 'done')) streak++;
+    else break;
+  }
+  return streak;
+}
+
+// ---------- personal records ----------
+
+export function personalRecords(matches) {
+  const rated = matches.filter(m => m.d > 600);
+  const best = (f, ok = () => true) => rated.filter(ok).reduce((b, m) => (b == null || f(m) > f(b) ? m : b), null);
+  const out = [];
+  const add = (key, label, m, value) => { if (m) out.push({ key, label, m, value }); };
+  const g = best(m => m.gpm || 0, m => m.gpm != null); add('gpm', 'Highest GPM', g, g && g.gpm);
+  const k = best(m => m.k); add('kills', 'Most kills', k, k && k.k);
+  const a = best(m => m.a); add('assists', 'Most assists', a, a && a.a);
+  const r = best(m => (m.k + m.a) / Math.max(1, m.de), m => m.k + m.a >= 10); add('kda', 'Best KDA', r, r && ((r.k + r.a) / Math.max(1, r.de)).toFixed(1));
+  const hd = best(m => m.hd || 0, m => m.hd != null); add('damage', 'Most hero damage', hd, hd && Math.round(hd.hd / 1000) + 'k');
+  const lw = best(m => m.d, won); add('long', 'Longest win', lw, lw && Math.round(lw.d / 60) + ' min');
+  // Longest win streak, in time order.
+  const asc = [...matches].sort((x, y) => x.t - y.t);
+  let run = 0, top = 0, end = null;
+  for (const m of asc) { run = won(m) ? run + 1 : 0; if (run > top) { top = run; end = m; } }
+  if (top) out.push({ key: 'streak', label: 'Longest win streak', m: end, value: top + ' wins' });
+  return out;
+}
+
+// ---------- activity heatmap ----------
+
+/** One entry per local day for the last `days` days: { key, date, g, w }. Oldest first. */
+export function activityDays(matches, days = 182, now = new Date()) {
+  const byDay = new Map();
+  for (const m of matches) { const k = dayKey(m.t); const e = byDay.get(k) || { g: 0, w: 0 }; e.g++; if (won(m)) e.w++; byDay.set(k, e); }
+  const out = [];
+  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  d.setDate(d.getDate() - (days - 1));
+  for (let i = 0; i < days; i++) {
+    const k = ymd(d), e = byDay.get(k) || { g: 0, w: 0 };
+    out.push({ key: k, date: new Date(d), g: e.g, w: e.w });
+    d.setDate(d.getDate() + 1);
+  }
+  return out;
+}
+
+/** Range (unix seconds) for one local calendar day given as YYYY-MM-DD, or null. */
+export function dayRange(key) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(key || '');
+  if (!m) return null;
+  const start = new Date(+m[1], +m[2] - 1, +m[3]);
+  if (isNaN(start)) return null;
+  const end = new Date(start); end.setDate(start.getDate() + 1);
+  const prev = new Date(start); prev.setDate(start.getDate() - 1);
+  return { start: start / 1000, end: end / 1000, prevStart: prev / 1000, prevEnd: start / 1000, label: start.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) };
+}

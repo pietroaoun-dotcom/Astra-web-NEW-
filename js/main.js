@@ -4,7 +4,9 @@ import { store, loadPrefs, savePrefs } from './store.js';
 import { loadHeroes, bracketOf, meta, loadBenchmark, loadMatchups, percentileOf, loadItems, loadItemPopularity } from './heroes.js';
 import { previewAccount, sync, loadLocal } from './sync.js';
 import { buildInsights, heroTable, heroLists, trends, heroForm, matchNotes, pickRecommendations, rollingWR, won } from './analysis.js';
-import { formWindow, periodRange, periodStats, inRange, summaryCards, periodVerdict, roleReport, formHeroTable, heroesToTry, itemBuild, trainingTargets, heroDrills, weeklyStrategy } from './coach.js';
+import { formWindow, periodRange, periodStats, inRange, summaryCards, periodVerdict, roleReport, formHeroTable, heroesToTry, itemBuild, trainingTargets, heroDrills, weeklyStrategy, missionTargets, dailyMissions, missionStreak, personalRecords, activityDays, dayRange } from './coach.js';
+import * as vis from './visuals.js';
+import { initCmdk } from './cmdk.js';
 import * as views from './views.js';
 import { guidesFor } from './guides.js';
 import { createProfileSync } from './profile.js';
@@ -124,7 +126,7 @@ function draftRows() {
 // ---------- render ----------
 async function render() {
   const r = route();
-  navEl.innerHTML = S.id ? ui.nav(r) : '';
+  drawShell(r);
   if (typeof askPanel !== 'undefined') askPanel.setVisible(!!S.id && r !== '/live');
   if (!S.id) { setApp(ui.onboarding(S.onb)); return; }
   try {
@@ -133,6 +135,7 @@ async function render() {
     if (r === '/') return home();
     if (r === '/train') return trainPage();
     if (r.startsWith('/period/')) return periodPage(r.split('/')[2]);
+    if (r.startsWith('/day/')) return periodPage('date:' + r.split('/')[2]);
     if (r === '/draft') return draftPage();
     if (r === '/live') return livePage();
     if (r === '/heroes') return heroesPage();
@@ -158,6 +161,11 @@ function home() {
     trendsHtml: ui.trendsCard(trends(c.form.list)), lastGameHtml: ui.lastGameCard(S.matches[0], matchNotes(S.matches[0], S.matches, S.heroes)),
     setupHtml: ui.setupBanner({ prefs: S.prefs, focusFound: full.focusFound, focusName: focusLabel(S.prefs.focus), facts: S.facts.length }),
     coachTake: store.get('coachTake'), roll: rollingWR(c.form.list.slice(0, 220), 20),
+    ringHtml: vis.formRing(c.form.stats, periodStats(S.matches)),
+    missionsHtml: missionsHtml(),
+    constellationHtml: vis.constellation({ rows: c.formRows, heroes: S.heroes, mains: [...c.recs.play.slice(0, 3).map(r => r.id), ...S.prefs.favorites], label: c.form.label }),
+    heatmapHtml: vis.heatmap(activityDays(S.matches, 182)),
+    recordsHtml: vis.recordsCard(personalRecords(S.matches), S.heroes),
   }));
 }
 
@@ -166,22 +174,25 @@ const strategy = () => { const c = coach(); return weeklyStrategy({ insights: in
 // ---------- period breakdown ----------
 const PERIOD_LABELS = { day: ['Today', 'Yesterday'], week: ['This week', 'Last week'], month: ['This month', 'Last month'], year: ['This year', 'Last year'], all: ['All time', null] };
 function periodData(kind) {
-  const r = periodRange(kind);
+  const r = kind.startsWith('date:') ? dayRange(kind.slice(5)) : periodRange(kind);
+  if (!r) return null;
   const list = inRange(S.matches, r.start, r.end);
   const prev = r.prevStart != null ? periodStats(inRange(S.matches, r.prevStart, r.prevEnd)) : null;
   return { r, list, s: periodStats(list), prev };
 }
 function periodPage(kind) {
-  if (!PERIOD_LABELS[kind]) return setApp(ui.notice('err', 'Unknown period. <a href="#/">Go home</a>.'));
-  const { r, list, s, prev } = periodData(kind), c = coach();
+  const isDate = kind.startsWith('date:');
+  const data = (PERIOD_LABELS[kind] || isDate) ? periodData(kind) : null;
+  if (!data) return setApp(ui.notice('err', 'Unknown period. <a href="#/">Go home</a>.'));
+  const { r, list, s, prev } = data, c = coach();
   // Breakdown: days for a week or month, months for a year, years for all time.
   const key = m => { const d = new Date(m.t * 1000); return kind === 'year' ? d.toLocaleDateString(undefined, { month: 'long' }) : kind === 'all' ? String(d.getFullYear()) : d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' }); };
   const groups = new Map();
-  if (kind !== 'day') for (const m of list) { const k = key(m); const g = groups.get(k) || { label: k, g: 0, w: 0 }; g.g++; if (won(m)) g.w++; groups.set(k, g); }
+  if (kind !== 'day' && !isDate) for (const m of list) { const k = key(m); const g = groups.get(k) || { label: k, g: 0, w: 0 }; g.g++; if (won(m)) g.w++; groups.set(k, g); }
   const ins = list.length >= 30 ? buildInsights(list, {}).filter(i => i.kind === 'fault').slice(0, 3) : [];
   setApp(views.periodPage({
-    kind, s, prev, prevLabel: PERIOD_LABELS[kind][1], range: r, list, heroes: S.heroes, shown: S.periodShown,
-    verdict: periodVerdict(s, c.form.stats, kind), roles: roleReport(list, S.heroes),
+    kind: isDate ? 'day' : kind, title: isDate ? r.label : undefined, s, prev, prevLabel: isDate ? 'The day before' : PERIOD_LABELS[kind][1], range: r, list, heroes: S.heroes, shown: S.periodShown,
+    verdict: periodVerdict(s, c.form.stats, isDate ? 'week' : kind), roles: roleReport(list, S.heroes),
     insights: ins.length ? `<ol class="plan">${ins.map((i, k) => ui.planItem(i, k + 1)).join('')}</ol>` : (s.games ? `<p class="mu sm">${s.games < 30 ? 'Detailed patterns need 30+ games in a period; the best and toughest games below show what stood out.' : ''}</p>` : ''),
     notesBest: s.best ? matchNotes(s.best, S.matches, S.heroes) : [], notesWorst: s.worst ? matchNotes(s.worst, S.matches, S.heroes) : [],
     breakdown: [...groups.values()],
@@ -522,6 +533,50 @@ const assistant = createAssistant({
 });
 const askPanel = initAskPanel(assistant);
 
+// ---------- shell: rail, tab bar, page title, profile chip ----------
+function drawShell(r) {
+  const navHtml = S.id ? ui.nav(r) : '';
+  navEl.innerHTML = navHtml;
+  $('tabbar').innerHTML = navHtml;
+  document.body.classList.toggle('signed-out', !S.id);
+  $('crumb').textContent = S.id ? ui.pageTitle(r) : '';
+  const chip = $('me-chip');
+  if (S.id && S.account) {
+    chip.hidden = false;
+    chip.innerHTML = `${S.account.avatar ? `<img src="${ui.esc(S.account.avatar)}" alt="" width="30" height="30">` : ''}<span><b>${ui.esc(S.account.name)}</b><small>${ui.esc(ui.rankName(S.account.rankTier))}</small></span>`;
+  } else chip.hidden = true;
+}
+
+/** Today's missions, checked against today's games, plus the streak of clean days before today. */
+function missionsHtml() {
+  const c = coach();
+  const t = missionTargets({ form: c.form.stats, recs: c.recs, prefs: S.prefs });
+  const r = periodRange('day');
+  return vis.missionsCard(dailyMissions(inRange(S.matches, r.start, r.end), t, S.heroes), missionStreak(S.matches, t, S.heroes));
+}
+
+// ---------- command bar (Ctrl+K) ----------
+const cmdk = initCmdk({
+  items: () => {
+    if (!S.id) return [];
+    const go = h => () => { location.hash = h; };
+    const out = [
+      ...ui.NAV.map(([h, l]) => ({ label: l, group: 'Go to', run: go(h), pinned: true, kw: 'page open' })),
+      ...[['day', 'Today'], ['week', 'This week'], ['month', 'This month'], ['year', 'This year'], ['all', 'All time']].map(([k, l]) => ({ label: `${l} breakdown`, group: 'Period', run: go('#/period/' + k), kw: 'summary stats period review', pinned: k === 'day' })),
+      { label: 'Start the game timer', group: 'Action', run: () => assistant.send('start game'), kw: 'live clock begin' },
+      { label: 'Game finished: review my game', group: 'Action', run: () => { askPanel.open(false); assistant.send('game finished'); }, kw: 'end review match' },
+      { label: 'Clear the draft', group: 'Action', run: () => assistant.send('clear the draft'), kw: 'reset new draft' },
+      { label: 'Sync my games now', group: 'Action', run: () => runSync(), kw: 'refresh update opendota' },
+      { label: assistant.state.conversation ? 'Turn conversation mode off' : 'Turn conversation mode on (hands-free)', group: 'Voice', run: () => assistant.setConversation(!assistant.state.conversation), kw: 'voice talk mic hands free' },
+      { label: 'Test the voice', group: 'Voice', run: () => assistant.testVoice(), kw: 'speak sound' },
+    ];
+    if (S.heroes) for (const h of Object.values(S.heroes)) out.push({ label: h.name, group: 'Hero', run: go('#/hero/' + h.id), kw: 'hero training' });
+    return out;
+  },
+  ask: text => { if (route() !== '/live') askPanel.open(false); assistant.send(text); },
+});
+$('cmdk-open').addEventListener('click', () => cmdk.open());
+
 // ---------- profile sync (server copy under the player ID) ----------
 const STATUS_TEXT = { saved: 'Saved to your profile', saving: 'Saving…', locked: 'Not saved yet: enter your passcode', nostorage: 'Saved on this device only (profile storage not set up)', error: 'Not saved: offline', off: 'Saved on this device' };
 function setProfileStatus(status, detail = '') {
@@ -591,7 +646,7 @@ app.addEventListener('click', async e => {
   if (act === 'voice-test') return assistant.testVoice();
   if (act === 'sync-now') { await profileSync.push(); return prefsPage(); }
   if (act === 'period-more') { S.periodShown += 30; return render(); }
-  if (act === 'period-review') { askPanel.open(); return assistant.send(`Review my ${(PERIOD_LABELS[b.dataset.kind] || ['period'])[0].toLowerCase()}: what went well, what went wrong, and what should I do next?`); }
+  if (act === 'period-review') { askPanel.open(); return assistant.send(`Review my games for ${(b.dataset.title || 'this period').toLowerCase()}: what went well, what went wrong, and what should I do next?`); }
   if (act === 'coach-take') return coachTake(b);
   if (act === 'mode') { S.draft.mode = b.dataset.mode; saveDraft(); return drawDraft(); }
   if (act === 'pick') {
@@ -681,7 +736,6 @@ if ('speechSynthesis' in window) speechSynthesis.addEventListener('voiceschanged
 async function coachTake(btn) {
   if (S.taking) return;
   const pass = store.get('passcode', '');
-  if (!pass) { askPanel.open(); return; }
   S.taking = true; btn.disabled = true; btn.textContent = 'Thinking…';
   try {
     const res = await fetch('/api/ask', { method: 'POST', headers: { 'content-type': 'application/json', 'x-astra-passcode': pass }, body: JSON.stringify({ kind: 'review', question: 'Give me my coach\'s take. One sentence on where I am right now compared with my all-time level. Then 4 short bullets: which role to queue and why, which 3 heroes to focus on, the single habit costing me the most games, and one hero to learn next and how. End with a one-line plan for my next session. Use my numbers.', context: assistant.context ? assistant.context() : undefined }) });

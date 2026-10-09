@@ -9,7 +9,7 @@ export const STATE_LIMITS = { bytes: 300000, perIpPerMin: 40, daily: 5000 };
 const keyFor = id => 'astra:profile:' + id;
 
 export default async function handler(req, res) {
-  const g = guard(req, res, { name: 'state', perMin: STATE_LIMITS.perIpPerMin, daily: STATE_LIMITS.daily });
+  const g = await guard(req, res, { name: 'state', perMin: STATE_LIMITS.perIpPerMin, daily: STATE_LIMITS.daily });
   if (!g) return;
   let body;
   try { body = await readJson(req, STATE_LIMITS.bytes + 2000); } catch (e) { return send(res, e.status || 400, { error: 'body', message: e.status === 413 ? 'Profile too large.' : 'Invalid JSON.' }); }

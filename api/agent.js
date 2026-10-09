@@ -98,7 +98,7 @@ export function sanitizeActions(list) {
 }
 
 export default async function handler(req, res) {
-  const g = guard(req, res, { name: 'ask', perMin: AGENT_LIMITS.perIpPerMin, daily: ASK_LIMITS.dailyTotal });
+  const g = await guard(req, res, { name: 'ask', perMin: AGENT_LIMITS.perIpPerMin, daily: ASK_LIMITS.dailyTotal });
   if (!g) return;
   let body;
   try { body = await readJson(req, AGENT_LIMITS.context + 12000); } catch (e) { return send(res, e.status || 400, { error: 'body', message: e.status === 413 ? 'Request too large.' : 'Invalid JSON.' }); }

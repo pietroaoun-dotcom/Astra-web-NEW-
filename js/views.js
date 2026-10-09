@@ -26,29 +26,36 @@ ${s.games ? `<div class="pc-big"><span class="${s.wr >= 0.5 ? 'w' : 'l'}">${s.wi
 
 const roleBars = roles => `<div class="roles">${roles.roles.filter(r => r.g).map(r => `<div class="role"><div class="row" style="justify-content:space-between"><span>${esc(r.label)}</span><span class="mu sm">${r.g} games</span></div><div class="rbar"><i style="width:${Math.round(r.wr * 100)}%" class="${r.wr >= 0.5 ? 'good' : 'bad'}"></i><span>${pc(r.wr)}</span></div></div>`).join('')}</div>`;
 
-export function dashboard({ account, form, all, cards, strategy, roles, insightsHtml, recsHtml, toTry, heroes, trendsHtml, lastGameHtml, setupHtml, coachTake, roll }) {
+export function dashboard({ account, form, all, cards, strategy, roles, insightsHtml, recsHtml, toTry, heroes, trendsHtml, lastGameHtml, setupHtml, coachTake, roll, ringHtml, missionsHtml, constellationHtml, heatmapHtml, recordsHtml }) {
   account = account || { name: 'Player', rankTier: null, avatar: '' };
-  return `<section class="card hero-card"><div class="me">${account.avatar ? `<img class="avatar" src="${esc(account.avatar)}" alt="" width="64" height="64" data-ini="${esc(account.name.slice(0, 1))}">` : ''}<div class="grow"><h1 style="margin:0">${esc(account.name)}</h1><div class="mu">${esc(rankName(account.rankTier))} · ranked only · coaching based on your ${esc(form.label)}</div></div></div>
-<div class="stats"><div><div class="big first">${esc(rankName(account.rankTier))}</div><span class="mu sm">rank</span></div>
-<div><div class="big ${form.stats.wr >= 0.5 ? 'w' : 'l'}">${pc1(form.stats.wr)}</div><span class="mu sm">current form (${form.stats.games} games)</span></div>
-<div><div class="big">${pc1(all.wr)}</div><span class="mu sm">all time (${all.games} games)</span></div></div>
-${roll.length > 1 ? `<div class="spark-wrap"><div class="mu sm">Rolling 20-game win rate, recent games (dashed line is 50%)</div>${spark(roll)}</div>` : ''}${setupHtml}</section>
+  const takeBody = coachTake ? `<div class="take-body">${esc(coachTake.text).split('\n').filter(Boolean).map(l => /^\s*[-*•]\s+/.test(l) ? `<p class="bul">${l.replace(/^\s*[-*•]\s+/, '')}</p>` : `<p>${l}</p>`).join('')}</div><p class="mu sm">Written ${esc(new Date(coachTake.ts).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }))} from your data.</p>` : '<p class="mu" style="margin:10px 0 0">A personal read of where you are and what to do next, written by the AI from your recent games, roles and heroes.</p>';
+  return `<section class="hud">
+<div class="hud-id card">
+  <div class="me">${account.avatar ? `<span class="av-ring"><img class="avatar" src="${esc(account.avatar)}" alt="" width="72" height="72" data-ini="${esc(account.name.slice(0, 1))}"></span>` : ''}<div class="grow"><p class="eyebrow">Commander</p><h1 class="hud-name">${esc(account.name)}</h1><div class="rankline"><span class="rank-badge">${esc(rankName(account.rankTier))}</span><span class="mu sm">${all.games.toLocaleString('en-US')} ranked games</span></div></div></div>
+  <div class="hud-stats"><div><span class="num-xl ${form.stats.wr >= 0.5 ? 'w' : 'l'}">${form.stats.wins}–${form.stats.losses}</span><span class="lbl">current form</span></div><div><span class="num-xl">${form.stats.kda.toFixed(1)}</span><span class="lbl">KDA ratio</span></div><div><span class="num-xl">${Math.round(form.stats.gpm || 0)}</span><span class="lbl">GPM</span></div></div>
+  ${roll.length > 1 ? `<div class="spark-wrap"><div class="lbl">Rolling 20-game win rate · ${esc(form.label)}</div>${spark(roll, { w: 600, h: 70 })}</div>` : ''}
+  ${setupHtml}
+</div>
+<div class="hud-ring card">${ringHtml}</div>
+<div class="hud-missions card">${missionsHtml}</div>
+</section>
 <div class="pcards">${cards.map(periodCard).join('')}</div>
-<div class="grid two"><section class="card strat"><h2>This week's strategy</h2><p class="headline">${esc(strategy.headline)}</p><dl class="plan-dl">${strategy.points.map(p => `<dt>${esc(p.k)}</dt><dd>${esc(p.v)}</dd>`).join('')}</dl><p class="sm" style="margin:10px 0 0"><a href="#/train">Open your training plan →</a></p></section>
-<section class="card"><h2>Which role to queue</h2>${roles.advice.role ? `<p class="headline">${esc(roles.advice.text)}</p>${roles.advice.sub ? `<p class="sm">${esc(roles.advice.sub)}</p>` : ''}` : `<p class="mu">${esc(roles.advice.text)}</p>`}${roleBars(roles)}<p class="mu sm" style="margin:10px 0 0">Role per game is estimated from your last hits per minute (OpenDota does not record roles for most games), over your ${esc(form.label)}.</p></section></div>
-<section class="card take"><div class="row" style="justify-content:space-between"><h2 style="margin:0">Coach's take</h2><button class="pri" data-act="coach-take">${coachTake ? 'Refresh' : 'Get my coach\'s take'}</button></div>
-${coachTake ? `<div class="take-body">${esc(coachTake.text).split('\n').filter(Boolean).map(l => /^\s*[-*•]\s+/.test(l) ? `<p class="bul">${l.replace(/^\s*[-*•]\s+/, '')}</p>` : `<p>${l}</p>`).join('')}</div><p class="mu sm">Written ${esc(new Date(coachTake.ts).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }))} from your data.</p>` : '<p class="mu" style="margin:10px 0 0">A personal read of where you are and what to do next, written by the AI from your recent games, roles and heroes.</p>'}</section>
+<div class="grid tri"><section class="card strat"><p class="eyebrow">This week</p><h2>Strategy</h2><p class="headline">${esc(strategy.headline)}</p><dl class="plan-dl">${strategy.points.map(p => `<dt>${esc(p.k)}</dt><dd>${esc(p.v)}</dd>`).join('')}</dl><p class="sm" style="margin:12px 0 0"><a href="#/train">Open your training plan →</a></p></section>
+<section class="card"><p class="eyebrow">Queue</p><h2>Which role</h2>${roles.advice.role ? `<p class="headline">${esc(roles.advice.text)}</p>${roles.advice.sub ? `<p class="sm">${esc(roles.advice.sub)}</p>` : ''}` : `<p class="mu">${esc(roles.advice.text)}</p>`}${roleBars(roles)}<p class="mu sm" style="margin:10px 0 0">Estimated from your last hits per minute over your ${esc(form.label)}.</p></section>
+<section class="card take"><p class="eyebrow">AI</p><div class="row" style="justify-content:space-between"><h2 style="margin:0">Coach's take</h2><button class="pri sm-btn" data-act="coach-take">${coachTake ? 'Refresh' : 'Generate'}</button></div>${takeBody}</section></div>
+<section class="card constel-card"><div class="row" style="justify-content:space-between;align-items:baseline"><div><p class="eyebrow">Your hero pool</p><h2 style="margin:0">Constellation</h2></div><a class="sm" href="#/heroes">All heroes →</a></div>${constellationHtml}</section>
+<div class="grid two"><section class="card"><p class="eyebrow">Last 26 weeks</p><h2>Activity</h2>${heatmapHtml}<p class="mu sm" style="margin:8px 0 0">Click a day to open its breakdown.</p></section><section class="card"><p class="eyebrow">All time</p><h2>Personal records</h2>${recordsHtml}</section></div>
 ${insightsHtml}
-<div class="grid two" style="margin-top:18px"><div>${recsHtml}${toTry.length ? `<section class="card" style="margin-top:18px"><h2>Heroes to try</h2><ul class="recs">${toTry.map(t => `<li><div class="row" style="justify-content:space-between"><b>${heroLink(heroes[t.id], t.id)}</b><a class="sm" href="#/hero/${t.id}">Training plan →</a></div><ul class="ev">${t.reasons.map(r => `<li>${esc(r)}</li>`).join('')}</ul></li>`).join('')}</ul></section>` : ''}</div><div>${trendsHtml}${lastGameHtml}</div></div>`;
+<div class="grid two" style="margin-top:18px"><div>${recsHtml}${toTry.length ? `<section class="card" style="margin-top:18px"><p class="eyebrow">Expand your pool</p><h2>Heroes to try</h2><ul class="recs">${toTry.map(t => `<li><div class="row" style="justify-content:space-between"><b>${heroLink(heroes[t.id], t.id)}</b><a class="sm" href="#/hero/${t.id}">Training plan →</a></div><ul class="ev">${t.reasons.map(r => `<li>${esc(r)}</li>`).join('')}</ul></li>`).join('')}</ul></section>` : ''}</div><div>${trendsHtml}${lastGameHtml}</div></div>`;
 }
 
 // ---------- period breakdown ----------
 const TITLES = { day: 'Today', week: 'This week', month: 'This month', year: 'This year', all: 'All time' };
 const statTile = (label, value, d = '') => `<div class="tile"><div class="mu sm">${esc(label)}</div><div class="tv">${value}</div>${d ? `<div class="sm">${d}</div>` : ''}</div>`;
 
-export function periodPage({ kind, s, prev, prevLabel, range, list, heroes, verdict, insights, notesBest, notesWorst, roles, breakdown, shown }) {
-  const title = TITLES[kind] || 'Period';
-  const from = range.start ? new Date(range.start * 1000).toLocaleDateString(undefined, { dateStyle: 'medium' }) : null;
+export function periodPage({ kind, s, prev, prevLabel, range, list, heroes, verdict, insights, notesBest, notesWorst, roles, breakdown, shown, title: customTitle }) {
+  const title = customTitle || TITLES[kind] || 'Period';
+  const from = range.start && !customTitle ? new Date(range.start * 1000).toLocaleDateString(undefined, { dateStyle: 'medium' }) : null;
   const nav = ['day', 'week', 'month', 'year', 'all'].map(k => `<a href="#/period/${k}"${k === kind ? ' aria-current="page"' : ''}>${TITLES[k]}</a>`).join('');
   if (!s.games) {
     return `<p><a href="#/">← Coach</a></p><nav class="subnav" aria-label="Periods">${nav}</nav><h1>${title}</h1><div class="card empty"><h2>No ranked games ${kind === 'day' ? 'today' : 'in this period'}</h2><p>${prev && prev.games ? `${esc(prevLabel)}: ${prev.wins}–${prev.losses} (${pc(prev.wr)}).` : ''} Play a game, then sync, and your breakdown appears here.</p></div>`;
@@ -56,7 +63,7 @@ export function periodPage({ kind, s, prev, prevLabel, range, list, heroes, verd
   const game = (m, n, label) => m ? `<section class="card"><h2>${label}</h2>${matchRow(m)}${n.length ? `<ul class="notes">${n.map(x => `<li class="${x.tone}"><span aria-hidden="true">${x.tone === 'good' ? '▲' : x.tone === 'bad' ? '▼' : '•'}</span> ${esc(x.text)}</li>`).join('')}</ul>` : ''}</section>` : '';
   return `<p><a href="#/">← Coach</a></p><nav class="subnav" aria-label="Periods">${nav}</nav>
 <div class="row" style="justify-content:space-between;align-items:flex-end"><div><h1>${title}</h1><p class="mu" style="margin:0 0 14px">${from ? 'Since ' + esc(from) + ' · ' : ''}${s.games} ranked game${s.games === 1 ? '' : 's'}${prev && prev.games ? ` · compared with ${esc(prevLabel.toLowerCase())}` : ''}</p></div>
-<button class="pri" data-act="period-review" data-kind="${kind}">Coach review of ${esc(title.toLowerCase())}</button></div>
+<button class="pri" data-act="period-review" data-kind="${kind}" data-title="${esc(title)}">Coach review of ${esc(title.toLowerCase())}</button></div>
 <div class="tiles">${statTile('Record', `<span class="${s.wr >= 0.5 ? 'w' : 'l'}">${s.wins}–${s.losses}</span>`, delta(s, prev, 'wr', { pts: true }) ? `win rate ${pc(s.wr)} ${delta(s, prev, 'wr', { pts: true })}` : `win rate ${pc(s.wr)}`)}
 ${statTile('Time played', hours(s.minutes))}
 ${statTile('Average KDA', `${s.k.toFixed(1)}/${s.de.toFixed(1)}/${s.a.toFixed(1)}`, delta(s, prev, 'kda', { d: 1 }) ? `ratio ${s.kda.toFixed(1)} ${delta(s, prev, 'kda', { d: 1 })}` : `ratio ${s.kda.toFixed(1)}`)}

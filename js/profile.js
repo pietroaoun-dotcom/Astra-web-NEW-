@@ -41,7 +41,7 @@ export function createProfileSync({ getId, passcode, onPulled, onStatus }) {
   }
 
   async function push() {
-    if (!getId() || !passcode()) return status(passcode() ? 'off' : 'locked', 'Saved on this device only.');
+    if (!getId()) return status('off', 'Saved on this device only.');
     if (busy) { again = true; return; }
     busy = true; status('saving');
     try {
@@ -58,7 +58,6 @@ export function createProfileSync({ getId, passcode, onPulled, onStatus }) {
   /** On open (and when the passcode is entered): adopt a newer server copy, or upload a newer local one. */
   async function pull() {
     if (!getId()) return status('off');
-    if (!passcode()) return status('locked', 'Enter your passcode to save to your profile.');
     try {
       const r = await call({ op: 'get' });
       if (r.status !== 200) return fail(r);

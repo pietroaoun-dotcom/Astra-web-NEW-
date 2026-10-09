@@ -23,7 +23,7 @@ export function sendLlmError(res, e) {
 }
 
 export default async function handler(req, res) {
-  const g = guard(req, res, { name: 'ask', perMin: LIMITS.perIpPerMin, daily: LIMITS.dailyTotal });
+  const g = await guard(req, res, { name: 'ask', perMin: LIMITS.perIpPerMin, daily: LIMITS.dailyTotal });
   if (!g) return;
 
   let body;

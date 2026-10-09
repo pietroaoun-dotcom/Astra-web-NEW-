@@ -46,3 +46,15 @@ export async function kvSet(key, value) {
   if (b === 'file') { await mkdir(dataDir, { recursive: true }); await writeFile(fileFor(key), text); return; }
   throw new StoreError('config', 'Profile storage is not set up yet. In Vercel: Storage > Create Database > Upstash for Redis, connect it to this project, then redeploy.');
 }
+
+/** Atomic counter in Redis (for daily caps that survive server restarts). Returns null without Redis. */
+export async function kvIncr(key, ttlSeconds) {
+  if (backend() !== 'redis') return null;
+  const n = await redis(['INCR', key]);
+  if (n === 1) await redis(['EXPIRE', key, ttlSeconds]);
+  return n;
+}
+export async function kvDecr(key) {
+  if (backend() !== 'redis') return null;
+  return redis(['DECR', key]);
+}

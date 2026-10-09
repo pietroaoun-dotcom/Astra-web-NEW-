@@ -26,7 +26,7 @@ export function createAssistant(api) {
     interim: '',             // live transcript while the player speaks
     conversation: false,     // hands-free: listen again after every reply
     tts: store.get('tts', true),
-    needPass: !store.get('passcode', ''),
+    needPass: false,        // only true if the server is locked (ASTRA_LOCKED=1) and refuses us
     voiceSupported: !!SR,
     notice: '',
   };
@@ -69,7 +69,7 @@ export function createAssistant(api) {
   function pickVoice() { const cfg = voiceCfg(), vs = voices(); return (cfg.name && vs.find(v => v.name === cfg.name)) || vs[0] || null; }
   function useCloud(local) {
     const cfg = voiceCfg();
-    if (local || ttsDown || !passcode() || cfg.engine === 'browser') return false;
+    if (local || ttsDown || cfg.engine === 'browser') return false;
     if (cfg.engine === 'cloud') return true;
     return false; // auto: always the instant browser voice; the cloud voice adds 2-3 s and has a tiny free quota
   }
@@ -253,7 +253,6 @@ export function createAssistant(api) {
       api.onGame();
       const lastGame = api.lastGame();
       const notes = mine.map(n => ({ text: n.text, atGameSeconds: n.t != null ? Math.round(n.t) : null }));
-      if (!passcode()) { st.needPass = true; emit(); return reply(ruleReview(lastGame, mine), { kind: 'offline' }); }
       busy = true; setStatus('thinking');
       const wait = push('astra', '', { kind: 'wait' });
       try {
@@ -298,7 +297,6 @@ export function createAssistant(api) {
 
   async function agent(text) {
     if (!api.hasData()) return reply('Sync your ranked games first, then I can help from your data.', { say: false });
-    if (!passcode()) { st.needPass = true; emit(); return runLocal(text, 'The AI is locked: enter your passcode to unlock it.'); }
     busy = true; setStatus('thinking');
     const wait = push('astra', '', { kind: 'wait' });
     let out;

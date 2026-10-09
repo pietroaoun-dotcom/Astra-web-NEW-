@@ -10,12 +10,31 @@ export const when = t => new Date(t * 1000).toLocaleDateString(undefined, { day:
 const RANKS = ['', 'Herald', 'Guardian', 'Crusader', 'Archon', 'Legend', 'Ancient', 'Divine', 'Immortal'];
 export const rankName = rt => (rt ? RANKS[Math.min(8, Math.floor(rt / 10))] + (rt % 10 ? ' ' + (rt % 10) : '') : 'Unranked');
 
-export const NAV = [['#/', 'Coach'], ['#/train', 'Train'], ['#/draft', 'Draft'], ['#/live', 'Live'], ['#/heroes', 'Heroes'], ['#/matches', 'Matches'], ['#/prefs', 'Preferences']];
+const ICONS = {
+  coach: '<path d="M12 2l2.4 6.6L21 11l-6.6 2.4L12 20l-2.4-6.6L3 11l6.6-2.4z"/>',
+  train: '<path d="M6.5 6.5v11M17.5 6.5v11M3 9.5v5M21 9.5v5M6.5 12h11"/>',
+  draft: '<path d="M14.5 17.5L3 6V3h3l11.5 11.5M13 19l6-6M16 16l4 4M19 21l2-2M9.5 14.5L3 21M5 17l2 2"/>',
+  live: '<circle cx="12" cy="12" r="2.2"/><path d="M16.2 7.8a6 6 0 0 1 0 8.4M7.8 16.2a6 6 0 0 1 0-8.4M19.1 4.9a10 10 0 0 1 0 14.2M4.9 19.1a10 10 0 0 1 0-14.2"/>',
+  heroes: '<path d="M12 3l2.6 5.6 6.1.7-4.5 4.2 1.2 6L12 16.6l-5.4 2.9 1.2-6-4.5-4.2 6.1-.7z"/>',
+  matches: '<path d="M9 6h12M9 12h12M9 18h12M4 6h.01M4 12h.01M4 18h.01"/>',
+  prefs: '<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1.5 14h5M9.5 8h5M17.5 16h5"/>',
+};
+export const icon = (k, cls = 'ico') => `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[k] || ''}</svg>`;
+export const NAV = [['#/', 'Coach', 'coach'], ['#/train', 'Train', 'train'], ['#/draft', 'Draft', 'draft'], ['#/live', 'Live', 'live'], ['#/heroes', 'Heroes', 'heroes'], ['#/matches', 'Matches', 'matches'], ['#/prefs', 'Profile', 'prefs']];
+const TITLES = { '/': 'Command center', '/train': 'Train', '/draft': 'Draft', '/live': 'Live', '/heroes': 'Heroes', '/matches': 'Matches', '/prefs': 'Profile & settings' };
+
+/** Section of the site a route belongs to (a single hero or match page belongs to its list). */
+export const sectionOf = route => (route.startsWith('/hero/') ? '/heroes' : route.startsWith('/match/') ? '/matches' : /^\/(period|day)\//.test(route) ? '/' : route);
+export function pageTitle(route) {
+  if (route.startsWith('/hero/')) return 'Hero';
+  if (route.startsWith('/match/')) return 'Match';
+  if (route.startsWith('/period/') || route.startsWith('/day/')) return 'Breakdown';
+  return TITLES[route] || 'Astra';
+}
 
 export function nav(route) {
-  // A single hero or match page belongs to its list section in the nav.
-  const section = route.startsWith('/hero/') ? '/heroes' : route.startsWith('/match/') ? '/matches' : route.startsWith('/period/') ? '/' : route;
-  return NAV.map(([h, l]) => `<a href="${h}"${(h === '#/' ? section === '/' : section.startsWith(h.slice(1))) ? ' aria-current="page"' : ''}>${l}</a>`).join('');
+  const section = sectionOf(route);
+  return NAV.map(([h, l, k]) => `<a href="${h}"${(h === '#/' ? section === '/' : section.startsWith(h.slice(1))) ? ' aria-current="page"' : ''}>${icon(k)}<span>${l}</span></a>`).join('');
 }
 
 /** Portrait with graceful fallback (see the delegated error handler in main.js). */
