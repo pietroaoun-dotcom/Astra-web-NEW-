@@ -70,10 +70,10 @@ export async function get(path, { signal, method = 'GET', retries = 3 } = {}) {
   }
 }
 
-/** Fields we store per match. Everything here is available unparsed. */
+/** Fields we store per match. Everything here is available unparsed (`heroes` is the ten picks, by player slot). */
 export const MATCH_FIELDS = ['hero_id', 'start_time', 'duration', 'player_slot', 'radiant_win', 'kills', 'deaths', 'assists',
   'lobby_type', 'game_mode', 'party_size', 'average_rank', 'version', 'gold_per_min', 'xp_per_min', 'last_hits', 'denies',
-  'hero_damage', 'tower_damage', 'hero_healing'];
+  'hero_damage', 'tower_damage', 'hero_healing', 'heroes'];
 
 export const projectQuery = () => MATCH_FIELDS.map(f => 'project=' + f).join('&');
 

@@ -15,6 +15,7 @@ import * as ui from './ui.js';
 import { createAssistant } from './assistant.js';
 import { initAskPanel, bindHoldToTalk, bindHoldKey } from './ask.js';
 import { renderConvo, statusLabel } from './convo.js';
+import { runQueries, autoQueries } from './query.js';
 import { buildContext, buildLastGame, draftSummary, reminderPlan, dueReminder, resolveHeroes, FOCUS_AREAS, focusLabel, pinFocus } from './context.js';
 
 const app = document.getElementById('app');
@@ -525,6 +526,16 @@ const assistant = createAssistant({
   },
   heroNames: () => (S.heroes ? Object.values(S.heroes).map(h => h.name) : []),
   heroes: () => S.heroes || {},
+  query: requests => (S.heroes ? runQueries(S.matches, S.heroes, requests) : []),
+  // Slices named in the question, plus the player's own record against each enemy already in the draft.
+  autoQuery: text => {
+    if (!S.heroes) return [];
+    const name = id => (S.heroes[id] ? S.heroes[id].name : null);
+    const asked = autoQueries(text, S.heroes);
+    const draftEnemies = (S.draft && S.draft.enemies || []).map(name).filter(Boolean).filter(n => !asked.some(q => (q.against || []).includes(n)));
+    const vsDraft = draftEnemies.slice(0, 5).map(n => ({ label: `Your games against ${n}`, against: [n] }));
+    return runQueries(S.matches, S.heroes, [...asked, ...vsDraft], new Date(), 14);
+  },
   apply: applyActions,
   lastGame: () => (S.heroes ? buildLastGame(S.matches, S.heroes) : null),
   sync: async () => { await runSync(); return S.matches; },

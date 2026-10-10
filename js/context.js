@@ -23,7 +23,7 @@ export function buildLastGame(matches, heroes) {
 }
 
 /** Compact, number-only context sent to the server. Hero names are resolved here, never raw ids. */
-export function buildContext({ account, matches, insights, heroes, rows, prefs, bracketLabel, notes = [], lastGame = null, draft = null, live = null, facts = [], page = null, coaching = null }) {
+export function buildContext({ account, matches, insights, heroes, rows, prefs, bracketLabel, notes = [], lastGame = null, draft = null, live = null, facts = [], page = null, coaching = null, history = null, queryResults = null }) {
   const total = matches.length, w = matches.filter(won).length, l10 = matches.slice(0, 10);
   const name = id => (heroes[id] ? heroes[id].name : 'Hero ' + id);
   return {
@@ -48,6 +48,8 @@ export function buildContext({ account, matches, insights, heroes, rows, prefs, 
     ...(coaching ? { coaching } : {}),
     recentGames: matches.slice(0, 10).map(m => ({ hero: name(m.h), result: won(m) ? 'win' : 'loss', kda: m.k + '/' + m.de + '/' + m.a, minutes: Math.round(m.d / 60) })),
     lastGame,
+    ...(queryResults && queryResults.length ? { queryResults } : {}),
+    ...(history && history.length ? { history } : {}),
     ...(draft ? { draft } : {}),
     ...(live ? { live } : {}),
     notes: notes.slice(-20).map(n => ({ text: String(n.text).slice(0, 300), atGameSeconds: n.t != null ? Math.round(n.t) : null })),

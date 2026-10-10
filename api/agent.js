@@ -1,13 +1,15 @@
-// POST /api/agent { text, context, heroNames }  header: x-astra-passcode  ->  { reply, actions }
+// POST /api/agent { text, context, heroNames, final? }  header: x-astra-passcode  ->  { reply, actions, requests }
 // The voice assistant: one call turns what the player said into app actions plus a grounded reply.
-// The browser applies the actions (its data lives there) and shows what actually changed.
+// The browser applies the actions (its data lives there) and shows what actually changed. When the AI needs
+// numbers that are not in the context it returns data requests; the browser runs them over the full match
+// history and calls again with final: true and the results in context.queryResults.
 import { complete } from './_llm.js';
 import { AGENT_SYSTEM, AGENT_SCHEMA, ACTION_TYPES, PAGES as PAGE_LIST } from './_prompt.js';
 import { guard, send, clip, readJson } from './_guard.js';
 import { defang, notesBlock } from './_text.js';
 import { LIMITS as ASK_LIMITS, sendLlmError } from './ask.js';
 
-export const AGENT_LIMITS = { text: 500, context: 14000, heroNames: 200, perIpPerMin: 15, maxActions: 12 };
+export const AGENT_LIMITS = { text: 500, context: 32000, heroNames: 200, perIpPerMin: 15, maxActions: 12, maxRequests: 4 };
 
 const TYPES = new Set(ACTION_TYPES);
 const PAGES = new Set(PAGE_LIST);
@@ -61,16 +63,33 @@ export function gateActions(actions, said) {
   });
 }
 
-/** Parse the model output into { reply, actions }, tolerating stray text around the JSON. */
+/** Keep data requests as small plain objects; the browser validates every field before running them. */
+export function sanitizeRequests(list) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (const q of list.slice(0, AGENT_LIMITS.maxRequests)) {
+    if (!q || typeof q !== 'object' || Array.isArray(q)) continue;
+    const x = {};
+    for (const [k, v] of Object.entries(q).slice(0, 30)) {
+      if (typeof v === 'string') x[k] = clip(v, 80);
+      else if (typeof v === 'number' || typeof v === 'boolean') x[k] = v;
+      else if (Array.isArray(v)) x[k] = v.filter(i => typeof i === 'string').slice(0, 7).map(i => clip(i, 40));
+    }
+    if (Object.keys(x).length) out.push(x);
+  }
+  return out;
+}
+
+/** Parse the model output into { reply, actions, requests }, tolerating stray text around the JSON. */
 export function parseAgentOutput(raw, said = '') {
   const s = String(raw || '').trim();
   const tryParse = t => { try { return JSON.parse(t); } catch { return null; } };
   let obj = tryParse(s);
   if (!obj) { const a = s.indexOf('{'), b = s.lastIndexOf('}'); if (a >= 0 && b > a) obj = tryParse(s.slice(a, b + 1)); }
-  if (!obj || typeof obj !== 'object') return { reply: s.slice(0, 2500), actions: [] };
+  if (!obj || typeof obj !== 'object') return { reply: s.slice(0, 3000), actions: [], requests: [] };
   // Named fields (current schema); a generic "actions" list is still accepted (e.g. from other providers).
   const actions = Array.isArray(obj.actions) ? obj.actions : fieldsToActions(obj);
-  return { reply: clip(obj.reply, 2500).trim(), actions: gateActions(sanitizeActions(actions), said) };
+  return { reply: clip(obj.reply, 3000).trim(), actions: gateActions(sanitizeActions(actions), said), requests: sanitizeRequests(obj.data_requests) };
 }
 
 /** Keep only well-formed actions with known types and bounded fields. */
@@ -110,12 +129,15 @@ export default async function handler(req, res) {
   const ctxText = JSON.stringify({ ...ctx, notes: undefined });
   if (ctxText.length > AGENT_LIMITS.context) return send(res, 413, { error: 'input', message: 'Context too large.' });
 
-  const data = JSON.stringify({ ...ctx, notes: undefined, heroNames });
+  const final = body.final === true;
+  const data = JSON.stringify({ ...ctx, notes: undefined, heroNames, ...(final ? { final: true } : {}) });
   const user = `<data>\n${defang(data)}\n</data>\n<notes>\n${notesBlock(ctx.notes)}\n</notes>\n<said>\n${defang(text)}\n</said>`;
   g.take();
   try {
-    const raw = await complete({ system: AGENT_SYSTEM, user, maxTokens: 2000, schema: AGENT_SCHEMA });
-    return send(res, 200, parseAgentOutput(raw, text));
+    const raw = await complete({ system: AGENT_SYSTEM, user, maxTokens: 6000, schema: AGENT_SCHEMA, smart: true });
+    const out = parseAgentOutput(raw, text);
+    if (final) out.requests = [];
+    return send(res, 200, out);
   } catch (e) {
     g.refund();
     return sendLlmError(res, e);
