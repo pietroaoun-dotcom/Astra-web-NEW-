@@ -6,6 +6,19 @@ import { parseCommand, speakable, ruleAnswer, ruleReview, localIntent, localAll,
 
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 const MAX_MESSAGES = 60;
+// Phones and tablets (iPadOS reports itself as a Mac with touch). On these, the microphone and the speaker share
+// one audio session: listening while Astra talks mutes or reroutes the voice, so listening waits until it ends.
+const MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && /Mac/.test(navigator.platform));
+
+/** A 0.1 s silent WAV, played on the first tap to unlock audio on phones. */
+function silentWavUrl() {
+  const n = 800, b = new DataView(new ArrayBuffer(44 + n * 2));
+  const str = (o, t) => [...t].forEach((c, i) => b.setUint8(o + i, c.charCodeAt(0)));
+  str(0, 'RIFF'); b.setUint32(4, 36 + n * 2, true); str(8, 'WAVE'); str(12, 'fmt '); b.setUint32(16, 16, true);
+  b.setUint16(20, 1, true); b.setUint16(22, 1, true); b.setUint32(24, 8000, true); b.setUint32(28, 16000, true);
+  b.setUint16(32, 2, true); b.setUint16(34, 16, true); str(36, 'data'); b.setUint32(40, n * 2, true);
+  return URL.createObjectURL(new Blob([b], { type: 'audio/wav' }));
+}
 
 /**
  * api (from main.js):
@@ -53,10 +66,24 @@ export function createAssistant(api) {
   // has a very small free quota (measured: refused after a few requests) and takes 2-3 seconds per sentence.
   const voiceCfg = () => ({ engine: 'auto', name: '', rate: 1.05, ...store.get('voice', {}) });
   let audio = null, speakToken = 0, ttsDown = false, speakingLine = '';
+  let utterance = null; // kept referenced: Chrome can garbage-collect a playing utterance and never fire onend
+
+  // Phone browsers only allow sound that starts from a tap. Replies arrive seconds later, so on the first tap we
+  // play silence through both voices; the browser then lets this page speak for the rest of the visit. The cloud
+  // voice reuses this one unlocked audio element (iOS only trusts elements that were first played from a tap).
+  const player = typeof Audio === 'function' ? new Audio() : null;
+  let unlocked = false;
+  function unlockAudio() {
+    if (unlocked) return;
+    unlocked = true;
+    try { const u = new SpeechSynthesisUtterance(' '); u.volume = 0; speechSynthesis.speak(u); } catch { /* no speech synthesis */ }
+    try { if (player) { player.src = silentWavUrl(); player.play().catch(() => { unlocked = false; }); } } catch { unlocked = false; }
+  }
+  for (const ev of ['pointerdown', 'touchend', 'keydown', 'click']) document.addEventListener(ev, unlockAudio, { capture: true, passive: true });
 
   function stopSpeaking() {
     speakToken++;
-    if (audio) { audio.pause(); audio = null; }
+    if (audio) { audio.pause(); audio.onended = audio.onerror = null; audio = null; }
     try { speechSynthesis.cancel(); } catch { /* not supported */ }
     if (st.status === 'speaking') setStatus('idle');
   }
@@ -85,14 +112,28 @@ export function createAssistant(api) {
   }
   function browserSpeak(text, token) {
     if (!('speechSynthesis' in window)) return afterSpeech(token);
-    try {
-      const u = new SpeechSynthesisUtterance(text);
-      const v = pickVoice(); if (v) { u.voice = v; u.lang = v.lang; }
-      u.rate = Math.min(1.5, Math.max(0.8, voiceCfg().rate));
-      u.onstart = () => { if (token === speakToken) setStatus('speaking'); };
-      u.onend = u.onerror = () => afterSpeech(token);
-      speechSynthesis.speak(u);
-    } catch { afterSpeech(token); }
+    // Mobile Chrome drops an utterance queued in the same instant as cancel(), so start it a moment later.
+    setTimeout(() => {
+      if (token !== speakToken) return;
+      try {
+        const u = new SpeechSynthesisUtterance(text);
+        const v = pickVoice(); if (v) { u.voice = v; u.lang = v.lang; }
+        u.rate = Math.min(1.5, Math.max(0.8, voiceCfg().rate));
+        let started = false;
+        u.onstart = () => { started = true; if (token === speakToken) setStatus('speaking'); };
+        u.onend = u.onerror = () => { utterance = null; afterSpeech(token); };
+        utterance = u;
+        speechSynthesis.resume(); // Safari and Chrome can be left paused (after a call, or a backgrounded tab)
+        speechSynthesis.speak(u);
+        // Some phones refuse silently (no tap yet, or the browser blocked it): say so instead of failing quietly.
+        setTimeout(() => {
+          if (started || token !== speakToken || speechSynthesis.speaking) return;
+          st.notice = MOBILE ? 'Your phone blocked the voice. Tap anywhere on the page once, check the silent switch and media volume, then try again.' : 'The browser did not play the voice. Click the page once, then try again.';
+          unlocked = false;
+          afterSpeech(token);
+        }, 3000);
+      } catch { afterSpeech(token); }
+    }, 80);
   }
   /** Speak the first sentence. In conversation mode Astra keeps listening, so talking over it interrupts it. */
   async function speak(text, { local = false } = {}) {
@@ -102,7 +143,8 @@ export function createAssistant(api) {
     stopSpeaking();
     const token = speakToken;
     speakingLine = line;
-    if (st.conversation) resumeListening();
+    if (st.conversation && !MOBILE) resumeListening(); // desktop: keep listening so you can talk over Astra
+    else if (st.conversation) pauseListening();       // phone: the mic would mute the voice; listen after it ends
     if (useCloud(local)) {
       try {
         const res = await fetch('/api/speak', { method: 'POST', headers: { 'content-type': 'application/json', 'x-astra-passcode': passcode() }, body: JSON.stringify({ text: line }) });
@@ -110,7 +152,8 @@ export function createAssistant(api) {
         const blob = await res.blob();
         if (token !== speakToken) return; // interrupted while the audio was being made
         const url = URL.createObjectURL(blob);
-        audio = new Audio(url);
+        audio = player || new Audio();
+        audio.src = url;
         audio.onplay = () => { if (token === speakToken) setStatus('speaking'); };
         audio.onended = audio.onerror = () => { URL.revokeObjectURL(url); afterSpeech(token); };
         await audio.play();
@@ -187,7 +230,7 @@ export function createAssistant(api) {
   }
   /** Stop listening for now without leaving conversation mode (while thinking). */
   function pauseListening() { wantListen = false; try { rc && rc.stop(); } catch { /* already stopped */ } }
-  function resumeListening() { if (st.conversation && !listening) setTimeout(() => { if (st.conversation && !busy && !listening) listen(); }, 250); }
+  function resumeListening() { if (st.conversation && !listening) setTimeout(() => { if (st.conversation && !busy && !listening && !(MOBILE && speakingNow())) listen(); }, 250); }
 
   // ---------- server calls ----------
   async function post(path, body) {
