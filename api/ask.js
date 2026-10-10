@@ -7,9 +7,9 @@ import { guard, send, clip, readJson, _resetGuard } from './_guard.js';
 import { defang, notesBlock } from './_text.js';
 
 export const LIMITS = {
-  question: 500, context: 14000,
+  question: 500, context: 32000,
   perIpPerMin: 8, badPasscodePerMin: 5, dailyTotal: Number(process.env.ASTRA_DAILY_LIMIT) || 400,
-  outTokens: { quick: 1500, review: 2000 }, // includes the model's internal thinking tokens
+  outTokens: { quick: 4000, review: 5000 }, // includes the model's internal thinking tokens
 };
 export const _resetLimits = _resetGuard;
 
@@ -39,8 +39,8 @@ export default async function handler(req, res) {
   const user = `<data>\n${defang(ctxText)}\n</data>\n<notes>\n${notesBlock(ctx.notes)}\n</notes>\n<question>\n${defang(question)}\n</question>`;
   g.take();
   try {
-    const answer = await complete({ system: SYSTEM, user, review, maxTokens: LIMITS.outTokens[review ? 'review' : 'quick'] });
-    return send(res, 200, { answer: answer.slice(0, 2500) });
+    const answer = await complete({ system: SYSTEM, user, review, smart: true, maxTokens: LIMITS.outTokens[review ? 'review' : 'quick'] });
+    return send(res, 200, { answer: answer.slice(0, 3000) });
   } catch (e) {
     g.refund();
     return sendLlmError(res, e);

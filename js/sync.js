@@ -26,8 +26,26 @@ export async function previewAccount(id) {
 
 export const loadLocal = id => store.get('matches:' + id, { id, matches: [], syncedAt: 0 });
 
+/**
+ * Allies and enemies from the API's `heroes` field ({ slot: { hero_id, player_slot } }), without the player.
+ * Returns {} when the field is missing, so older rows simply have no team data.
+ */
+export function teamsOf(m) {
+  const list = m.heroes && typeof m.heroes === 'object' ? Object.values(m.heroes) : [];
+  const picks = list.filter(x => x && x.hero_id && Number.isFinite(x.player_slot));
+  if (picks.length < 6) return {};
+  const radiant = m.player_slot < 128;
+  const al = [], en = [];
+  for (const x of picks) {
+    if (x.player_slot === m.player_slot) continue;
+    ((x.player_slot < 128) === radiant ? al : en).push(x.hero_id);
+  }
+  return { al, en };
+}
+
 /** Compact a raw API row. */
 export const slim = m => ({
+  ...teamsOf(m),
   id: m.match_id, t: m.start_time, d: m.duration, h: m.hero_id, s: m.player_slot, rw: m.radiant_win ? 1 : 0,
   k: m.kills, de: m.deaths, a: m.assists, p: m.party_size ?? 1, gm: m.game_mode, ar: m.average_rank ?? null,
   gpm: m.gold_per_min ?? null, xpm: m.xp_per_min ?? null, lh: m.last_hits ?? null, dn: m.denies ?? null,
@@ -47,7 +65,15 @@ export async function sync(id, { signal } = {}) {
     const days = Math.ceil((Date.now() / 1000 - newest.t) / 86400) + 1;
     q += '&date=' + days;
   }
+  // Games synced before team data was stored are refetched once in full, so ally/enemy questions cover them.
+  const backfill = newest && !store.get('teams:' + id) && local.matches.some(m => !m.en);
+  if (backfill) q = RANKED + '&' + projectQuery();
   const rows = await get('players/' + id + '/matches?' + q, { signal });
+  if (backfill) {
+    const byId = new Map(rows.map(r => [r.match_id, r]));
+    for (const m of local.matches) { const r = byId.get(m.id); if (r && !m.en) Object.assign(m, teamsOf(r)); }
+    store.set('teams:' + id, 1);
+  }
   const seen = new Set(local.matches.map(m => m.id));
   const fresh = rows.filter(r => !seen.has(r.match_id)).map(slim);
   // A parse can finish after we first stored a match, so refresh the parsed flag on the overlap.

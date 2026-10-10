@@ -1,13 +1,24 @@
 // LLM provider adapter. Default is Gemini's free tier; set LLM_PROVIDER=anthropic to swap.
-// Env: GEMINI_API_KEY, GEMINI_MODEL, GEMINI_REVIEW_MODEL, ANTHROPIC_API_KEY, ANTHROPIC_MODEL.
+// Env: GEMINI_API_KEY, GEMINI_MODEL, GEMINI_SMART_MODEL, GEMINI_REVIEW_MODEL, ANTHROPIC_API_KEY, ANTHROPIC_MODEL.
 
 export class LlmError extends Error {
   constructor(kind, message) { super(message); this.kind = kind; }
 }
 
-// Per-attempt timeouts. Callers fall through up to 2 text models or 3 voice models, so the worst case
-// (2 x 18 s or 3 x 15 s) stays inside the 60 s maxDuration set for both functions in vercel.json.
+// Per-attempt timeouts. Text calls fall through a model list inside one overall budget, and voice calls through
+// up to 3 models (3 x 15 s), so both stay inside the 60 s maxDuration set in vercel.json.
 export const TEXT_TIMEOUT_MS = 18000, VOICE_TIMEOUT_MS = 15000;
+export const SMART_TIMEOUT_MS = 30000, TEXT_BUDGET_MS = 54000;
+
+/**
+ * Text models to try, best first. Coaching answers (smart) start with the full Flash model, which reasons far
+ * better than the lite models, and fall back to the lite models when it is busy, missing or slow.
+ */
+export function geminiModels({ smart = false, review = false } = {}) {
+  const env = process.env;
+  const first = smart ? [review && env.GEMINI_REVIEW_MODEL, env.GEMINI_SMART_MODEL, 'gemini-3.5-flash', env.GEMINI_MODEL] : [review && env.GEMINI_REVIEW_MODEL, env.GEMINI_MODEL];
+  return [...new Set([...first, 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite'].filter(Boolean))];
+}
 
 async function post(url, headers, body, timeoutMs = TEXT_TIMEOUT_MS) {
   const ctl = new AbortController();
@@ -25,13 +36,13 @@ async function post(url, headers, body, timeoutMs = TEXT_TIMEOUT_MS) {
   } finally { clearTimeout(timer); }
 }
 
-async function gemini({ system, user, review, maxTokens, schema }) {
+async function gemini({ system, user, review, smart, maxTokens, schema }) {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new LlmError('config', 'GEMINI_API_KEY is not set.');
-  // gemini-2.5-* is closed to new accounts and the full flash models are often overloaded on the free tier,
-  // so default to the lite models and fall through the list when one is busy or unavailable.
-  const chosen = (review && process.env.GEMINI_REVIEW_MODEL) || process.env.GEMINI_MODEL;
-  const models = [...new Set([chosen, 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite'].filter(Boolean))];
+  // The full flash models are sometimes overloaded on the free tier, so fall through the list when one is busy,
+  // unavailable or too slow for the remaining time budget.
+  const models = geminiModels({ smart, review });
+  const t0 = Date.now();
   const body = {
     system_instruction: { parts: [{ text: system }] },
     contents: [{ role: 'user', parts: [{ text: user }] }],
@@ -40,29 +51,33 @@ async function gemini({ system, user, review, maxTokens, schema }) {
     generationConfig: { maxOutputTokens: maxTokens, temperature: schema ? 0.2 : 0.4, ...(schema ? { responseMimeType: 'application/json', responseSchema: schema } : {}) },
   };
   let data, last;
-  for (const model of models) {
+  for (const [i, model] of models.entries()) {
+    const left = TEXT_BUDGET_MS - (Date.now() - t0);
+    if (left < 5000) break;
+    // The first (strongest) model gets more time to think; the fallbacks share what is left.
+    const limit = Math.min(left, i === 0 && smart ? SMART_TIMEOUT_MS : TEXT_TIMEOUT_MS);
     try {
-      data = await post(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, { 'x-goog-api-key': key }, body);
+      data = await post(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, { 'x-goog-api-key': key }, body, limit);
       break;
     } catch (e) {
       last = e;
       if (!(e instanceof LlmError) || (e.kind !== 'busy' && e.kind !== 'upstream')) throw e;
     }
   }
-  if (!data) throw last;
+  if (!data) throw last || new LlmError('busy', 'The AI took too long. Try again.');
   const cand = data.candidates && data.candidates[0];
   const text = cand && cand.content && cand.content.parts ? cand.content.parts.map(p => p.text || '').join('').trim() : '';
   if (!text) throw new LlmError('empty', 'The AI returned no answer' + (cand && cand.finishReason ? ' (' + cand.finishReason + ').' : '.'));
   return text;
 }
 
-async function anthropic({ system, user, review, maxTokens, schema }) {
+async function anthropic({ system, user, maxTokens, schema }) {
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) throw new LlmError('config', 'ANTHROPIC_API_KEY is not set.');
-  const model = process.env.ANTHROPIC_MODEL || (review ? 'claude-sonnet-5-5' : 'claude-haiku-4-5-20251001');
+  const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-5-5';
   const sys = schema ? system + '\n\nRespond with ONLY a JSON object matching this schema, no prose around it:\n' + JSON.stringify(schema) : system;
   const data = await post('https://api.anthropic.com/v1/messages', { 'x-api-key': key, 'anthropic-version': '2023-06-01' },
-    { model, max_tokens: maxTokens, system: sys, messages: [{ role: 'user', content: user }] });
+    { model, max_tokens: maxTokens, system: sys, messages: [{ role: 'user', content: user }] }, SMART_TIMEOUT_MS);
   const text = (data.content || []).map(b => b.text || '').join('').trim();
   if (!text) throw new LlmError('empty', 'The AI returned no answer.');
   return text;

@@ -11,6 +11,8 @@ const MAX_MESSAGES = 60;
  * api (from main.js):
  *   hasData(): bool                     enough synced games to coach from
  *   context(extra): object              compact, number-only context for the AI
+ *   query(requests): object[]           run the AI's data requests over the full match history
+ *   autoQuery(text): object[]           the slices a question obviously needs (heroes, periods it names)
  *   heroNames(): string[]               canonical hero names (the AI must copy these)
  *   heroes(): object                    hero map, for the offline parser
  *   apply(actions): Promise<{ lines, failed }>   apply draft/pref/memory/navigation actions
@@ -256,7 +258,7 @@ export function createAssistant(api) {
       busy = true; setStatus('thinking');
       const wait = push('astra', '', { kind: 'wait' });
       try {
-        const r = await post('/api/ask', { question: 'Review my last game and connect my notes to the numbers.', kind: 'review', context: api.context({ lastGame, notes }) });
+        const r = await post('/api/ask', { question: 'Review my last game and connect my notes to the numbers.', kind: 'review', context: api.context({ lastGame, notes, queryResults: lastGame ? safe(() => api.query([{ label: `Your record on ${lastGame.hero}`, hero: [lastGame.hero], groupBy: 'month', limit: 6 }])) : [] }) });
         drop(wait); reply(r.answer);
       } catch (e) { drop(wait); reply(explain(e) + ' Rule-based review instead:\n' + ruleReview(lastGame, mine), { kind: 'offline', say: false }); }
       finally { busy = false; if (st.status === 'thinking') setStatus('idle'); }
@@ -295,13 +297,35 @@ export function createAssistant(api) {
     }
   }
 
+  /** The last few turns before this one, so follow-ups ("what about Lina?") keep their meaning. */
+  function history() {
+    const turns = st.messages.filter(m => m.kind !== 'wait' && m.kind !== 'reminder' && m.text).slice(0, -1).slice(-8);
+    return turns.map(m => ({ who: m.who === 'you' ? 'player' : 'astra', text: m.text.slice(0, 500) }));
+  }
+  const safe = f => { try { return f() || []; } catch (e) { console.error(e); return []; } };
+  /** Context for one question: the summary, the conversation so far, and the slices of history it needs. */
+  function questionContext(text, requested = []) {
+    // The AI's own requests come first; the automatic slices are dropped from the end if the request grows too big.
+    const queryResults = [...requested, ...safe(() => api.autoQuery(text))];
+    while (queryResults.length > requested.length && JSON.stringify(queryResults).length > 16000) queryResults.pop();
+    return api.context({ history: history(), ...(queryResults.length ? { queryResults } : {}) });
+  }
+
   async function agent(text) {
     if (!api.hasData()) return reply('Sync your ranked games first, then I can help from your data.', { say: false });
     busy = true; setStatus('thinking');
     const wait = push('astra', '', { kind: 'wait' });
     let out;
     try {
-      out = await post('/api/agent', { text, context: api.context(), heroNames: api.heroNames() });
+      out = await post('/api/agent', { text, context: questionContext(text), heroNames: api.heroNames() });
+      // The AI asked for numbers it did not have: run them over the full history and ask once more.
+      if (out.requests && out.requests.length) {
+        const results = safe(() => api.query(out.requests));
+        try {
+          const again = await post('/api/agent', { text, final: true, context: questionContext(text, results), heroNames: api.heroNames() });
+          out = { ...out, reply: again.reply || out.reply };
+        } catch { /* keep the first reply and its actions */ }
+      }
     } catch (e) {
       drop(wait); busy = false; setStatus('idle');
       return runLocal(text, explain(e));
@@ -316,7 +340,7 @@ export function createAssistant(api) {
         // "They have Axe, what should I pick?": the AI answered before its picks were applied,
         // so ask again with the updated draft.
         const wait2 = push('astra', '', { kind: 'wait' });
-        try { answer = (await post('/api/ask', { question: text, context: api.context() })).answer || answer; } catch { /* keep the first answer */ }
+        try { answer = (await post('/api/ask', { question: text, context: questionContext(text) })).answer || answer; } catch { /* keep the first answer */ }
         drop(wait2);
       }
       if (answer || acts.length) reply(answer, { acts, local: !answer });
